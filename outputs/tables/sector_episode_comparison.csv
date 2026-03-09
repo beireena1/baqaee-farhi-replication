@@ -1,0 +1,24 @@
+sector,label,covid_delta_y_pct,covid_delta_p_pct,covid_supply_contrib_pct,covid_demand_contrib_pct,covid_total_contrib_pct,infl_delta_y_pct,infl_delta_p_pct,infl_supply_contrib_pct,infl_demand_contrib_pct,infl_total_contrib_pct,role_reversal
+AG,Agriculture & Forestry,-3.000,-3.000,0.059,-0.038,0.021,2.000,21.000,-0.781,0.105,-0.675,True
+AIR,Air Transportation,-70.000,-20.000,-0.646,-0.703,-1.350,38.000,22.000,0.207,0.499,0.706,False
+ARTS,"Arts, Entertainment & Recreation",-56.000,-10.000,-0.405,-0.564,-0.969,28.000,8.000,0.158,0.323,0.481,False
+AUTO,Motor Vehicles Manufacturing,-42.000,-4.000,-0.498,-0.922,-1.420,-8.000,18.000,-0.644,0.200,-0.444,True
+CHEM,Chemical Manufacturing,-6.000,-2.000,-0.021,-0.084,-0.104,4.000,23.000,-1.107,0.227,-0.879,True
+CONST,Construction,-12.000,-1.500,-0.311,-1.044,-1.355,8.500,16.500,-1.235,1.717,0.482,False
+ELEC,Computer & Electronic Mfg,-10.000,-1.500,-0.162,-0.156,-0.317,-4.000,3.000,-0.231,-0.005,-0.236,False
+FIN,Finance & Insurance,-4.000,2.000,-0.699,-0.295,-0.994,9.000,8.500,-1.153,1.487,0.335,False
+FOOD_MFG,Food & Beverage Manufacturing,-4.000,2.500,-0.303,-0.149,-0.452,3.500,19.000,-1.409,0.891,-0.518,False
+FOOD_SVC,Food Services & Accommodation,-43.000,-12.000,-0.310,-2.195,-2.505,22.000,18.500,-0.578,1.690,1.112,False
+GOVT,Government,1.000,0.000,0.322,0.686,1.008,4.000,6.000,0.322,3.565,3.888,False
+HEALTH,Health Care,-18.500,2.000,-2.771,-6.923,-9.694,6.000,5.000,0.135,2.901,3.036,False
+INFO,Information & Communication,2.000,1.000,-0.035,0.153,0.117,12.000,2.500,0.035,0.777,0.812,False
+MIN,Mining & Extraction,-18.000,-28.000,0.602,-0.061,0.541,12.000,35.000,-1.016,0.058,-0.958,True
+OTH_MFG,Other Manufacturing,-18.000,-3.000,-1.641,-0.775,-2.417,5.000,15.000,-5.080,0.738,-4.342,False
+OTH_SVC,Other Services,-20.000,-6.000,-0.055,-0.631,-0.686,18.000,12.000,-0.132,0.728,0.596,False
+PETRO,Petroleum & Coal Products,-30.000,-32.000,0.670,-0.873,-0.204,9.000,34.000,-1.562,0.494,-1.069,True
+PROF,Professional Services,-6.000,-1.500,-0.064,-0.775,-0.839,10.000,8.500,-1.683,1.862,0.179,False
+REAL,Real Estate & Rental,-3.000,-1.500,-1.581,-1.377,-2.958,5.500,13.500,-0.878,4.168,3.290,False
+RETAIL,Retail Trade,-15.000,-2.000,-0.226,-0.986,-1.213,7.500,9.500,-0.528,0.986,0.458,False
+TRANS,Other Transportation,-35.000,-8.000,-0.546,-1.146,-1.693,14.000,18.000,-0.632,0.786,0.154,False
+UTIL,Utilities,-4.000,-2.000,-0.329,-0.196,-0.526,3.000,15.500,-0.521,0.376,-0.145,False
+WHOL,Wholesale Trade,-8.000,-2.500,-0.020,-0.132,-0.152,9.500,9.000,-0.699,0.220,-0.479,True
