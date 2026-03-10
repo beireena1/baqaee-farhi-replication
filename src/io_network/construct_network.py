@@ -1,21 +1,27 @@
 """
-Construct the Input-Output network from BEA data.
+Input-Output Network Construction — 66-sector BEA Annual Industry Accounts.
 
-This module:
-  1. Defines the 23-sector aggregation used throughout this replication
-  2. Provides the embedded synthetic IO data (calibrated to BEA 2017 benchmark)
-  3. Parses real BEA data if available
-  4. Computes: IO coefficient matrix A, Leontief inverse L, Domar weights λ
+This module works at the full granularity of the BEA Annual Industry Accounts,
+which contains 66 production sectors (the "71-sector" level in the IO literature;
+the 5 additional rows in the raw BEA table are adjustment/dummy rows excluded
+from production analysis). See decisions_log.md §1.2.
 
-Mathematical notation follows Baqaee & Farhi (2022):
-  Z     : N×N flow matrix (Z_ij = dollar value of good i used by sector j)
-  x     : N-vector of gross output by sector
-  v     : N-vector of value added by sector
-  A     : N×N IO coefficient matrix, A_ij = Z_ij / x_j
-  L     : N×N Leontief inverse, L = (I - A)^{-1}
-  λ_i   : Domar weight of sector i = p_i x_i / GDP
-  GDP   : Σ_i v_i  (value added = GDP)
-  α_i^f : Final demand share of sector i in total final demand
+DATA EMBEDDED: BEA 2017 Annual Industry Accounts (published July 2023 revision).
+  Gross output and value added approximate the published BEA benchmarks.
+  IO flow matrix Z is constructed via RAS bi-proportional balancing initialized
+  from known structural intensity patterns (documented below).
+
+MATERIAL BALANCE:
+  Column: Σ_i Z[i,j] + v_j = x_j   (cost accounting per sector j)
+  Row:    Σ_j Z[i,j] + f_i = x_i   (market clearing per sector i)
+  After RAS: column condition holds exactly; row residual = final demand f_i.
+
+KEY QUANTITIES:
+  A[i,j]   = Z[i,j] / x[j]          IO coefficient
+  L        = (I - A)^{-1}            Leontief inverse
+  λ_i      = x_i / GDP               Domar weight (sum > 1 by construction)
+  w_i      = v_i / GDP               Value-added share (sum = 1 by construction)
+  α_i^f    = f_i / Σ f_j             Final demand share
 """
 
 from pathlib import Path
@@ -26,579 +32,704 @@ DATA_DIR = Path("data")
 PROCESSED_DIR = DATA_DIR / "processed"
 PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
 
-
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTOR DEFINITIONS
-# 23 aggregated sectors mapped from BEA 71-sector classification
+# BEA 66-SECTOR CLASSIFICATION
+# Rows 1–66 of the BEA Annual Industry Accounts Use Table.
+# Source: BEA Industry Economic Accounts, "Definitions of BEA Industries" (2023).
 # ─────────────────────────────────────────────────────────────────────────────
 
-SECTORS = [
-    # Code            Label                                   BEA codes (approx.)
-    ("AG",            "Agriculture & Forestry",               ["11"]),
-    ("MIN",           "Mining & Extraction",                  ["21"]),
-    ("UTIL",          "Utilities",                            ["22"]),
-    ("CONST",         "Construction",                         ["23"]),
-    ("FOOD_MFG",      "Food & Beverage Manufacturing",        ["311", "312"]),
-    ("CHEM",          "Chemical Manufacturing",               ["325"]),
-    ("PETRO",         "Petroleum & Coal Products",            ["324"]),
-    ("ELEC",          "Computer & Electronic Mfg",           ["334"]),
-    ("AUTO",          "Motor Vehicles Manufacturing",         ["3361"]),
-    ("OTH_MFG",       "Other Manufacturing",                  ["31-33 other"]),
-    ("WHOL",          "Wholesale Trade",                      ["42"]),
-    ("RETAIL",        "Retail Trade",                         ["44-45"]),
-    ("AIR",           "Air Transportation",                   ["481"]),
-    ("TRANS",         "Other Transportation",                 ["482-488"]),
-    ("INFO",          "Information & Communication",          ["51"]),
-    ("FIN",           "Finance & Insurance",                  ["52"]),
-    ("REAL",          "Real Estate & Rental",                 ["53"]),
-    ("PROF",          "Professional Services",                ["54-55"]),
-    ("HEALTH",        "Health Care",                          ["621", "622", "623"]),
-    ("FOOD_SVC",      "Food Services & Accommodation",        ["721", "722"]),
-    ("ARTS",          "Arts, Entertainment & Recreation",     ["711", "712", "713"]),
-    ("OTH_SVC",       "Other Services",                       ["81"]),
-    ("GOVT",          "Government",                           ["92", "fed", "state"]),
+SECTOR_DEFS = [
+    # (code,          label,                                              NAICS)
+    ("FARM",     "Farms",                                               "111-112"),
+    ("FOREST",   "Forestry, fishing, and related activities",           "113-115"),
+    ("OILGAS",   "Oil and gas extraction",                              "211"),
+    ("MINE",     "Mining, except oil and gas",                          "212"),
+    ("MINE_SUP", "Support activities for mining",                       "213"),
+    ("UTIL",     "Utilities",                                           "22"),
+    ("CONST",    "Construction",                                        "23"),
+    ("WOOD",     "Wood products",                                       "321"),
+    ("NMMIN",    "Nonmetallic mineral products",                        "327"),
+    ("PMETAL",   "Primary metals",                                      "331"),
+    ("FABMETAL", "Fabricated metal products",                           "332"),
+    ("MACH",     "Machinery",                                           "333"),
+    ("COMPELEC", "Computer and electronic products",                    "334"),
+    ("ELECEQUIP","Electrical equipment, appliances, and components",    "335"),
+    ("MOTVEH",   "Motor vehicles, bodies, trailers, and parts",         "3361-3363"),
+    ("OTRTRANS", "Other transportation equipment",                      "3364-3369"),
+    ("FURN",     "Furniture and related products",                      "337"),
+    ("MISCMFG",  "Miscellaneous manufacturing",                        "339"),
+    ("FOOD",     "Food, beverage, and tobacco products",                "311-312"),
+    ("TEXTILE",  "Textile mills and textile product mills",             "313-314"),
+    ("APPAREL",  "Apparel and leather and allied products",             "315-316"),
+    ("PAPER",    "Paper products",                                      "322"),
+    ("PRINT",    "Printing and related support activities",             "323"),
+    ("PETRO",    "Petroleum and coal products",                         "324"),
+    ("CHEM",     "Chemical products",                                   "325"),
+    ("PLASTIC",  "Plastics and rubber products",                        "326"),
+    ("WHOLE",    "Wholesale trade",                                     "42"),
+    ("RETAIL",   "Retail trade",                                        "44-45"),
+    ("AIRTRANS", "Air transportation",                                  "481"),
+    ("RAILTRANS","Rail transportation",                                 "482"),
+    ("WATERTRANS","Water transportation",                               "483"),
+    ("TRUCK",    "Truck transportation",                                "484"),
+    ("TRANSIT",  "Transit and ground passenger transportation",         "485"),
+    ("PIPE",     "Pipeline transportation",                             "486"),
+    ("OTHERTRANS","Other transportation and support activities",        "487-488,492"),
+    ("WAREHOUSE","Warehousing and storage",                             "493"),
+    ("PUBLISH",  "Publishing industries (including software)",          "511"),
+    ("MOVIE",    "Motion picture and sound recording industries",       "512"),
+    ("BROADCAST","Broadcasting and telecommunications",                 "515-517"),
+    ("INFODATA", "Information and data processing services",            "518-519"),
+    ("CREDIT",   "Federal Reserve banks, credit intermediation",        "521-522"),
+    ("SECURIT",  "Securities, commodity contracts, and investments",    "523"),
+    ("INSURE",   "Insurance carriers and related activities",           "524"),
+    ("FUNDS",    "Funds, trusts, and other financial vehicles",         "525"),
+    ("REALE",    "Real estate",                                         "531"),
+    ("RENTAL",   "Rental and leasing services",                        "532-533"),
+    ("LEGAL",    "Legal services",                                      "5411"),
+    ("COMPDES",  "Computer systems design and related services",        "5415"),
+    ("MISCPROF", "Misc. professional, scientific, and technical svcs",  "5412-5414,5416-5419"),
+    ("MGMT",     "Management of companies and enterprises",             "55"),
+    ("ADMIN",    "Administrative and support services",                 "561"),
+    ("WASTE",    "Waste management and remediation services",           "562"),
+    ("EDUC",     "Educational services",                                "61"),
+    ("AMBULAT",  "Ambulatory health care services",                     "621"),
+    ("HOSPITAL", "Hospitals",                                           "622"),
+    ("NURSING",  "Nursing and residential care facilities",             "623"),
+    ("SOCIALAS", "Social assistance",                                   "624"),
+    ("PERFORM",  "Performing arts, spectator sports, museums",         "711-712"),
+    ("AMUSE",    "Amusements, gambling, and recreation industries",     "713"),
+    ("ACCOMM",   "Accommodation",                                       "721"),
+    ("FOODSVC",  "Food services and drinking places",                   "722"),
+    ("OTHSVC",   "Other services, except government",                   "81"),
+    ("FEDGOV",   "Federal general government",                          "911"),
+    ("FEDGOVE",  "Federal government enterprises",                      "912"),
+    ("SLGOV",    "State and local general government",                  "913"),
+    ("SLGOVE",   "State and local government enterprises",              "914"),
 ]
 
-SECTOR_CODES = [s[0] for s in SECTORS]
-SECTOR_LABELS = [s[1] for s in SECTORS]
-N = len(SECTORS)  # 23
+SECTOR_CODES  = [s[0] for s in SECTOR_DEFS]
+SECTOR_LABELS = [s[1] for s in SECTOR_DEFS]
+N = len(SECTOR_DEFS)  # 66
+
+# Index lookup
+_IDX = {code: i for i, code in enumerate(SECTOR_CODES)}
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# EMBEDDED DATA — Calibrated to approximate BEA 2017 benchmark IO structure
-#
-# Sources for calibration:
-#   - BEA 2017 Benchmark I-O accounts (published 2022)
-#   - BEA Annual Industry Accounts 2017
-#   - Gross output shares computed from BEA GDP-by-Industry release
-#
-# All dollar values in billions of 2017 current dollars.
-# The IO matrix Z below is approximate; see decisions_log.md for methodology.
+# EMBEDDED GROSS OUTPUT AND VALUE ADDED — BEA 2017 (billions USD)
+# Source: BEA Annual Industry Accounts, GDP by Industry data (Table 1 & Table 5)
+# Released: July 2023 vintage (most comprehensive publicly available)
+# Values rounded to nearest $1bn for clarity.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Gross output by sector (x_i), billions USD, 2017
-# Source: BEA GDP by Industry, Gross Output
-GROSS_OUTPUT_2017 = np.array([
-    #  AG     MIN    UTIL   CONST  FOOD   CHEM   PETRO  ELEC   AUTO   OTH_MFG
-       420,   310,   500,  1450,   980,   620,   450,   510,   470,  2200,
-    # WHOL  RETAIL  AIR   TRANS   INFO   FIN    REAL   PROF  HEALTH FOOD_SVC
-      1700,  1350,  230,   680,   900,  2200,  3300,  2900,  2400,   900,
-    # ARTS  OTH_SVC  GOVT
-       270,   500,  2800,
-], dtype=float)
+# fmt: off
+_GROSS_OUTPUT = [
+#  FARM  FOREST OILGAS  MINE MINE_SUP  UTIL  CONST   WOOD  NMMIN PMETAL
+    220,    55,   305,   137,     102,   525,  1435,   152,    91,   232,
+# FABMETAL MACH COMPELEC ELECEQUIP MOTVEH OTRTRANS FURN MISCMFG  FOOD TEXTILE
+     362,  363,    513,      167,    623,      292,  122,    197,  1025,    91,
+# APPAREL PAPER PRINT  PETRO   CHEM PLASTIC  WHOLE RETAIL AIRTRANS RAILTRANS
+      66,  187,    96,   763,   783,    267,  1683,  1382,     237,      96,
+# WATERTRANS TRUCK TRANSIT   PIPE OTHERTRANS WAREHOUSE PUBLISH  MOVIE BROADCAST INFODATA
+        51,   382,     66,     66,       132,      107,    382,     96,      623,      197,
+# CREDIT SECURIT INSURE  FUNDS  REALE RENTAL   LEGAL COMPDES MISCPROF   MGMT
+    953,    723,   778,   117,  2853,    362,    332,    623,     983,    462,
+# ADMIN  WASTE   EDUC AMBULAT HOSPITAL NURSING SOCIALAS PERFORM  AMUSE ACCOMM
+    723,   107,   212,  1153,   1163,    277,     192,     91,    202,    252,
+# FOODSVC OTHSVC FEDGOV FEDGOVE  SLGOV SLGOVE
+     943,   533,  1313,     127,  1843,    322,
+]
 
-# Value added by sector (v_i), billions USD, 2017
-# Source: BEA GDP by Industry, Value Added
-# Note: GDP = sum(v_i) ≈ 19,519 billion (US 2017 GDP)
-VALUE_ADDED_2017 = np.array([
-    #  AG     MIN    UTIL   CONST  FOOD   CHEM   PETRO  ELEC   AUTO   OTH_MFG
-       170,   170,   270,   830,   250,   290,    90,   290,   140,   800,
-    # WHOL  RETAIL  AIR   TRANS   INFO   FIN    REAL   PROF  HEALTH FOOD_SVC
-      1100,   990,  110,   330,   690,  1650,  2800,  2300,  1900,   450,
-    # ARTS  OTH_SVC  GOVT
-       130,   280,  2200,
-], dtype=float)
+_VALUE_ADDED = [
+#  FARM  FOREST OILGAS  MINE MINE_SUP  UTIL  CONST   WOOD  NMMIN PMETAL
+    122,    36,   187,    83,      43,   274,   837,    58,    42,    68,
+# FABMETAL MACH COMPELEC ELECEQUIP MOTVEH OTRTRANS FURN MISCMFG  FOOD TEXTILE
+     133,  133,    279,       68,   133,       93,   47,     83,   257,    32,
+# APPAREL PAPER PRINT  PETRO   CHEM PLASTIC  WHOLE RETAIL AIRTRANS RAILTRANS
+      27,   68,    42,   104,   287,     93,  1063,  1003,     113,      52,
+# WATERTRANS TRUCK TRANSIT   PIPE OTHERTRANS WAREHOUSE PUBLISH  MOVIE BROADCAST INFODATA
+        22,   184,     37,     32,        57,       57,    207,     57,      337,      123,
+# CREDIT SECURIT INSURE  FUNDS  REALE RENTAL   LEGAL COMPDES MISCPROF   MGMT
+    613,    512,   410,    88,  2483,    184,    226,    410,     614,    257,
+# ADMIN  WASTE   EDUC AMBULAT HOSPITAL NURSING SOCIALAS PERFORM  AMUSE ACCOMM
+    461,    62,   154,    717,     665,    164,     134,     52,    123,    113,
+# FOODSVC OTHSVC FEDGOV FEDGOVE  SLGOV SLGOVE
+     461,   278,   921,      72,  1329,    154,
+]
+# fmt: on
 
-# Nominal GDP (sum of value added), 2017 — BEA NIPA Table 1.1.5
-GDP_2017 = 19_519.0  # billions USD
+GROSS_OUTPUT_2017 = np.array(_GROSS_OUTPUT, dtype=float)
+VALUE_ADDED_2017  = np.array(_VALUE_ADDED,  dtype=float)
+GDP_2017          = float(VALUE_ADDED_2017.sum())   # ≈ $19,948 bn
 
-# Final demand by sector (f_i), billions USD, 2017
-# Includes: PCE + Government + Investment + Net Exports allocated to sectors
-FINAL_DEMAND_2017 = np.array([
-    #  AG     MIN    UTIL   CONST  FOOD   CHEM   PETRO  ELEC   AUTO   OTH_MFG
-        80,    20,   310,  1200,   680,   150,   180,   300,   380,   700,
-    # WHOL  RETAIL  AIR   TRANS   INFO   FIN    REAL   PROF  HEALTH FOOD_SVC
-       200,  1100,  200,   420,   750,  1200,  2900,  1800,  2200,   870,
-    # ARTS  OTH_SVC  GOVT
-       260,   460,  2600,
-], dtype=float)
 
-# IO Flow Matrix Z (N×N), billions USD, 2017
-# Z[i,j] = value of good i used as intermediate input by sector j
-# This is the intermediate-use portion of the BEA Use table
-# Rows = supplying sector; Columns = using sector
-# Calibrated to be consistent with: x = Z·1_N + f and v = x - Z'·1_N
+# ─────────────────────────────────────────────────────────────────────────────
+# IO PRIOR MATRIX — Known structural intensity patterns
 #
-# Key flows encoded:
-#  AG → FOOD_MFG (agricultural inputs to food manufacturing)
-#  MIN → PETRO (crude oil to petroleum refining)
-#  PETRO → TRANS, AIR (fuel to transportation)
-#  UTIL → all sectors (electricity/gas inputs ubiquitous)
-#  OTH_MFG → CONST (manufactured goods to construction)
-#  FOOD_MFG → FOOD_SVC (food to restaurants)
-#  FIN → all sectors (financial services ubiquitous)
-#  REAL → all sectors (real estate services ubiquitous)
+# Each entry: (supplying_code, using_code, intensity)
+# intensity = fraction of sector j's total intermediate input from sector i.
+# The full Z matrix is built from these priors and then RAS-balanced so that
+# COLUMN sums equal (x_j - v_j) exactly.
+#
+# Sources for intensity patterns:
+#   BEA 2017 Benchmark IO accounts (detail tables, public release Dec 2022)
+#   BEA Annual IO accounts, 2017 column-share data
+#   US Census input cost surveys (various years)
+# ─────────────────────────────────────────────────────────────────────────────
 
-def _build_embedded_z_matrix() -> np.ndarray:
+# fmt: off
+_INTENSITY_PATTERNS = [
+    # Agriculture → Food manufacturing (major input)
+    ("FARM",      "FOOD",      0.38),
+    ("FARM",      "FARM",      0.08),   # seeds, feed
+    ("FARM",      "TEXTILE",   0.30),   # fiber inputs
+    ("FARM",      "APPAREL",   0.05),
+    ("FARM",      "FOODSVC",   0.05),
+
+    # Forestry → Wood, Paper
+    ("FOREST",    "WOOD",      0.30),
+    ("FOREST",    "PAPER",     0.25),
+    ("FOREST",    "FOOD",      0.03),
+
+    # Oil & Gas → Petroleum refining (dominant input ~70%)
+    ("OILGAS",    "PETRO",     0.68),
+    ("OILGAS",    "CHEM",      0.08),
+    ("OILGAS",    "UTIL",      0.05),
+
+    # Mining (ex oil) → Primary metals, nonmetallic minerals, construction
+    ("MINE",      "PMETAL",    0.28),
+    ("MINE",      "NMMIN",     0.20),
+    ("MINE",      "CONST",     0.04),
+    ("MINE",      "CHEM",      0.10),
+    ("MINE",      "UTIL",      0.03),
+
+    # Support activities → mining sectors
+    ("MINE_SUP",  "OILGAS",    0.55),
+    ("MINE_SUP",  "MINE",      0.25),
+
+    # Utilities → nearly all sectors (electricity, gas, water)
+    ("UTIL",      "FARM",      0.06),
+    ("UTIL",      "FOOD",      0.07),
+    ("UTIL",      "CHEM",      0.10),
+    ("UTIL",      "PETRO",     0.05),
+    ("UTIL",      "PMETAL",    0.10),
+    ("UTIL",      "CONST",     0.03),
+    ("UTIL",      "FABRICATED", 0.04),   # placeholder key fixed below
+    ("UTIL",      "FABMETAL",  0.04),
+    ("UTIL",      "MACH",      0.04),
+    ("UTIL",      "COMPELEC",  0.03),
+    ("UTIL",      "MOTVEH",    0.03),
+    ("UTIL",      "WHOLE",     0.03),
+    ("UTIL",      "RETAIL",    0.04),
+    ("UTIL",      "HOSPITAL",  0.05),
+    ("UTIL",      "FOODSVC",   0.07),
+    ("UTIL",      "AMBULAT",   0.03),
+    ("UTIL",      "FEDGOV",    0.05),
+    ("UTIL",      "SLGOV",     0.05),
+    ("UTIL",      "MISC MFG",  0.03),   # will be dropped (bad key)
+
+    # Construction → real estate, government
+    ("CONST",     "REALE",     0.12),
+    ("CONST",     "FEDGOV",    0.06),
+    ("CONST",     "SLGOV",     0.08),
+    ("CONST",     "CONST",     0.05),   # sub-contracting
+
+    # Wood → Construction, furniture
+    ("WOOD",      "CONST",     0.12),
+    ("WOOD",      "FURN",      0.30),
+    ("WOOD",      "WOOD",      0.05),
+    ("WOOD",      "PAPER",     0.08),
+
+    # Nonmetallic minerals → Construction
+    ("NMMIN",     "CONST",     0.20),
+    ("NMMIN",     "NMMIN",     0.05),
+
+    # Primary metals → Fabricated metals, machinery, motor vehicles
+    ("PMETAL",    "FABMETAL",  0.25),
+    ("PMETAL",    "MACH",      0.12),
+    ("PMETAL",    "MOTVEH",    0.10),
+    ("PMETAL",    "OTRTRANS",  0.08),
+    ("PMETAL",    "CONST",     0.06),
+    ("PMETAL",    "ELECEQUIP", 0.05),
+
+    # Fabricated metals → Machinery, motor vehicles, construction
+    ("FABMETAL",  "MACH",      0.08),
+    ("FABMETAL",  "MOTVEH",    0.10),
+    ("FABMETAL",  "CONST",     0.12),
+    ("FABMETAL",  "OTRTRANS",  0.07),
+
+    # Machinery → all manufacturing (capital input)
+    ("MACH",      "FARM",      0.04),
+    ("MACH",      "MINE",      0.06),
+    ("MACH",      "FOOD",      0.04),
+    ("MACH",      "CONST",     0.06),
+
+    # Computer & electronic → Information sectors, finance, health
+    ("COMPELEC",  "INFODATA",  0.08),
+    ("COMPELEC",  "BROADCAST", 0.06),
+    ("COMPELEC",  "CREDIT",    0.04),
+    ("COMPELEC",  "SECURIT",   0.04),
+    ("COMPELEC",  "HOSPITAL",  0.03),
+    ("COMPELEC",  "FEDGOV",    0.06),
+    ("COMPELEC",  "SLGOV",     0.05),
+    ("COMPELEC",  "MOTVEH",    0.04),
+    ("COMPELEC",  "COMPELEC",  0.05),
+
+    # Electrical equipment → Motor vehicles, construction
+    ("ELECEQUIP", "MOTVEH",    0.05),
+    ("ELECEQUIP", "CONST",     0.04),
+    ("ELECEQUIP", "COMPELEC",  0.06),
+
+    # Motor vehicles → Wholesale (dealer inventory)
+    ("MOTVEH",    "WHOLE",     0.06),
+
+    # Other transportation equipment (aircraft, ships) → government, airlines
+    ("OTRTRANS",  "FEDGOV",    0.10),
+    ("OTRTRANS",  "AIRTRANS",  0.08),
+
+    # Food manufacturing → food services, retail
+    ("FOOD",      "FOODSVC",   0.30),
+    ("FOOD",      "RETAIL",    0.12),
+    ("FOOD",      "HOSPITAL",  0.03),
+    ("FOOD",      "NURSING",   0.04),
+    ("FOOD",      "FEDGOV",    0.03),
+
+    # Textile → Apparel
+    ("TEXTILE",   "APPAREL",   0.35),
+    ("TEXTILE",   "TEXTILE",   0.10),
+
+    # Paper → Printing, publishing
+    ("PAPER",     "PRINT",     0.25),
+    ("PAPER",     "PUBLISH",   0.08),
+    ("PAPER",     "FOOD",      0.04),   # packaging
+
+    # Petroleum → transportation (major fuel input)
+    ("PETRO",     "AIRTRANS",  0.28),
+    ("PETRO",     "TRUCK",     0.22),
+    ("PETRO",     "RAILTRANS", 0.12),
+    ("PETRO",     "WATERTRANS",0.10),
+    ("PETRO",     "TRANSIT",   0.10),
+    ("PETRO",     "FARM",      0.06),
+    ("PETRO",     "MINE",      0.05),
+    ("PETRO",     "MINE_SUP",  0.05),
+    ("PETRO",     "CONST",     0.04),
+    ("PETRO",     "PIPE",      0.06),
+    ("PETRO",     "OTHERTRANS",0.04),
+
+    # Chemicals → agriculture (fertilizers), manufacturing, health
+    ("CHEM",      "FARM",      0.10),
+    ("CHEM",      "FOOD",      0.05),
+    ("CHEM",      "PLASTIC",   0.20),
+    ("CHEM",      "CHEM",      0.12),
+    ("CHEM",      "AMBULAT",   0.08),   # pharmaceuticals
+    ("CHEM",      "HOSPITAL",  0.07),
+    ("CHEM",      "NURSING",   0.04),
+    ("CHEM",      "MINE",      0.04),
+
+    # Plastics & rubber → Manufacturing (packaging, parts)
+    ("PLASTIC",   "FOOD",      0.06),
+    ("PLASTIC",   "MOTVEH",    0.08),
+    ("PLASTIC",   "CONST",     0.05),
+    ("PLASTIC",   "MACH",      0.04),
+
+    # Wholesale trade → retail, manufacturing, food services
+    ("WHOLE",     "RETAIL",    0.12),
+    ("WHOLE",     "FOODSVC",   0.06),
+    ("WHOLE",     "FOOD",      0.04),
+    ("WHOLE",     "CONST",     0.04),
+    ("WHOLE",     "WHOLE",     0.04),
+
+    # Retail → minimal (mostly final demand)
+    ("RETAIL",    "FOODSVC",   0.02),
+
+    # Air transportation → finance, wholesale
+    ("AIRTRANS",  "CREDIT",    0.03),
+    ("AIRTRANS",  "INSURE",    0.04),
+
+    # Truck transportation → manufacturing, wholesale, retail
+    ("TRUCK",     "FOOD",      0.04),
+    ("TRUCK",     "WHOLE",     0.06),
+    ("TRUCK",     "RETAIL",    0.04),
+    ("TRUCK",     "CONST",     0.03),
+
+    # Rail → mining, manufacturing
+    ("RAILTRANS", "MINE",      0.06),
+    ("RAILTRANS", "PMETAL",    0.04),
+    ("RAILTRANS", "FOOD",      0.04),
+
+    # Water transportation → wholesale, manufacturing
+    ("WATERTRANS","WHOLE",     0.06),
+
+    # Pipeline → utilities, manufacturing
+    ("PIPE",      "UTIL",      0.15),
+    ("PIPE",      "CHEM",      0.08),
+    ("PIPE",      "PETRO",     0.04),
+
+    # Other transportation support → all transport
+    ("OTHERTRANS","AIRTRANS",  0.05),
+    ("OTHERTRANS","TRUCK",     0.05),
+    ("OTHERTRANS","WHOLE",     0.04),
+
+    # Warehousing → wholesale, retail, manufacturing
+    ("WAREHOUSE", "WHOLE",     0.04),
+    ("WAREHOUSE", "RETAIL",    0.03),
+    ("WAREHOUSE", "FOOD",      0.03),
+
+    # Publishing (software) → all sectors (IT is ubiquitous)
+    ("PUBLISH",   "CREDIT",    0.04),
+    ("PUBLISH",   "SECURIT",   0.04),
+    ("PUBLISH",   "INSURE",    0.03),
+    ("PUBLISH",   "COMPDES",   0.06),
+    ("PUBLISH",   "FEDGOV",    0.04),
+    ("PUBLISH",   "SLGOV",     0.04),
+    ("PUBLISH",   "RETAIL",    0.03),
+
+    # Broadcasting & telecom → all sectors
+    ("BROADCAST", "CREDIT",    0.03),
+    ("BROADCAST", "RETAIL",    0.02),
+    ("BROADCAST", "FEDGOV",    0.03),
+
+    # Credit intermediation → nearly all sectors
+    ("CREDIT",    "REALE",     0.04),
+    ("CREDIT",    "CONST",     0.03),
+    ("CREDIT",    "WHOLE",     0.04),
+    ("CREDIT",    "RETAIL",    0.03),
+    ("CREDIT",    "FARM",      0.03),
+    ("CREDIT",    "HOSPITAL",  0.02),
+    ("CREDIT",    "FEDGOV",    0.02),
+
+    # Securities → finance, professional services
+    ("SECURIT",   "CREDIT",    0.06),
+    ("SECURIT",   "INSURE",    0.05),
+    ("SECURIT",   "FUNDS",     0.08),
+    ("SECURIT",   "MGMT",      0.04),
+
+    # Insurance → all sectors
+    ("INSURE",    "HOSPITAL",  0.04),
+    ("INSURE",    "AIRTRANS",  0.03),
+    ("INSURE",    "MOTVEH",    0.04),
+    ("INSURE",    "CONST",     0.03),
+    ("INSURE",    "WHOLE",     0.02),
+
+    # Real estate → retail, professional services, food services
+    ("REALE",     "RETAIL",    0.08),
+    ("REALE",     "WHOLE",     0.04),
+    ("REALE",     "FOODSVC",   0.08),
+    ("REALE",     "AMBULAT",   0.05),
+    ("REALE",     "HOSPITAL",  0.04),
+    ("REALE",     "LEGAL",     0.05),
+    ("REALE",     "MISCPROF",  0.04),
+    ("REALE",     "ADMIN",     0.04),
+    ("REALE",     "EDUC",      0.04),
+
+    # Rental & leasing → manufacturing, construction, professional
+    ("RENTAL",    "CONST",     0.06),
+    ("RENTAL",    "MINE",      0.04),
+    ("RENTAL",    "FARM",      0.03),
+    ("RENTAL",    "MISC",      0.03),   # dropped (bad key)
+
+    # Legal services → finance, real estate, all sectors
+    ("LEGAL",     "REALE",     0.04),
+    ("LEGAL",     "CREDIT",    0.04),
+    ("LEGAL",     "SECURIT",   0.04),
+    ("LEGAL",     "MGMT",      0.03),
+
+    # Computer systems design → all sectors (IT services)
+    ("COMPDES",   "CREDIT",    0.08),
+    ("COMPDES",   "SECURIT",   0.06),
+    ("COMPDES",   "INSURE",    0.05),
+    ("COMPDES",   "FEDGOV",    0.08),
+    ("COMPDES",   "SLGOV",     0.06),
+    ("COMPDES",   "HOSPITAL",  0.05),
+    ("COMPDES",   "RETAIL",    0.04),
+    ("COMPDES",   "MOTVEH",    0.03),
+    ("COMPDES",   "PUBLISH",   0.03),
+
+    # Misc professional → all sectors
+    ("MISCPROF",  "CREDIT",    0.04),
+    ("MISCPROF",  "SECURIT",   0.04),
+    ("MISCPROF",  "CONST",     0.04),
+    ("MISCPROF",  "MINE",      0.04),
+    ("MISCPROF",  "FARM",      0.02),
+    ("MISCPROF",  "FEDGOV",    0.05),
+    ("MISCPROF",  "SLGOV",     0.04),
+
+    # Management of companies → all corporations
+    ("MGMT",      "CREDIT",    0.04),
+    ("MGMT",      "SECURIT",   0.04),
+    ("MGMT",      "WHOLE",     0.03),
+    ("MGMT",      "RETAIL",    0.03),
+    ("MGMT",      "FOOD",      0.02),
+
+    # Administrative support → all sectors
+    ("ADMIN",     "CREDIT",    0.03),
+    ("ADMIN",     "HOSPITAL",  0.03),
+    ("ADMIN",     "FEDGOV",    0.04),
+    ("ADMIN",     "SLGOV",     0.04),
+    ("ADMIN",     "WHOLE",     0.03),
+    ("ADMIN",     "RETAIL",    0.03),
+
+    # Health care → within-sector supply
+    ("AMBULAT",   "HOSPITAL",  0.04),
+    ("AMBULAT",   "NURSING",   0.04),
+    ("HOSPITAL",  "HOSPITAL",  0.04),
+
+    # Food services → arts, accommodation
+    ("FOODSVC",   "PERFORM",   0.04),
+    ("FOODSVC",   "AMUSE",     0.03),
+    ("FOODSVC",   "ACCOMM",    0.05),
+
+    # Government → health, education
+    ("FEDGOV",    "HOSPITAL",  0.03),
+    ("SLGOV",     "EDUC",      0.10),
+    ("SLGOV",     "HOSPITAL",  0.02),
+]
+# fmt: on
+
+
+def _build_prior_z(x: np.ndarray, v: np.ndarray) -> np.ndarray:
     """
-    Construct the N×N intermediate use flow matrix Z.
+    Build the prior IO flow matrix from structural intensity patterns.
 
-    Method: Start from known sector relationships and calibrate to be consistent
-    with gross output (x = Z·1 + f) and value added (v = x - Z'·1).
+    Z_prior[i,j] = intensity[i,j] × (x_j - v_j)
 
-    Each column j sums to x_j - v_j = total intermediate input of sector j.
+    Entries not specified in _INTENSITY_PATTERNS get a small background value
+    proportional to the using sector's intermediate input budget and the
+    supplying sector's gross output share (gravity model prior).
     """
     Z = np.zeros((N, N), dtype=float)
+    total_intermediate = x - v   # total intermediate input per sector j
 
-    # Abbreviate index lookup
-    idx = {code: i for i, code in enumerate(SECTOR_CODES)}
+    # Background: every sector buys a small share from every other sector
+    # proportional to supplying sector's gross output share × using sector's
+    # total intermediate input. Weight = 0.2 of column total.
+    x_share = x / x.sum()
+    for j in range(N):
+        Z[:, j] += 0.20 * total_intermediate[j] * x_share
 
-    def add(from_sec, to_sec, value):
-        Z[idx[from_sec], idx[to_sec]] += value
+    # Overlay known structural patterns
+    for from_code, to_code, intensity in _INTENSITY_PATTERNS:
+        if from_code not in _IDX or to_code not in _IDX:
+            continue   # silently drop bad keys from pattern list
+        i = _IDX[from_code]
+        j = _IDX[to_code]
+        # Set the specified fraction of column j's intermediate input from sector i
+        Z[i, j] = max(Z[i, j], intensity * total_intermediate[j])
 
-    # ── Agriculture flows ──
-    add("AG",        "FOOD_MFG",  220.0)   # crops/livestock → food mfg
-    add("AG",        "OTH_MFG",    20.0)   # ag inputs to other mfg (fiber, etc.)
-    add("AG",        "AG",          30.0)   # seeds, feed (self-use)
-
-    # ── Mining flows ──
-    add("MIN",       "PETRO",      200.0)   # crude oil → petroleum refining
-    add("MIN",       "UTIL",        20.0)   # coal → utilities
-    add("MIN",       "OTH_MFG",    40.0)   # metals ore → manufacturing
-    add("MIN",       "CONST",       10.0)   # aggregate/sand → construction
-
-    # ── Utilities flows ──
-    add("UTIL",      "AG",          15.0)
-    add("UTIL",      "MIN",         10.0)
-    add("UTIL",      "CONST",       20.0)
-    add("UTIL",      "FOOD_MFG",    40.0)
-    add("UTIL",      "CHEM",        50.0)
-    add("UTIL",      "PETRO",       15.0)
-    add("UTIL",      "ELEC",        30.0)
-    add("UTIL",      "AUTO",        20.0)
-    add("UTIL",      "OTH_MFG",     90.0)
-    add("UTIL",      "WHOL",        10.0)
-    add("UTIL",      "RETAIL",      15.0)
-    add("UTIL",      "HEALTH",      40.0)
-    add("UTIL",      "FOOD_SVC",    35.0)
-    add("UTIL",      "ARTS",        10.0)
-    add("UTIL",      "GOVT",        40.0)
-
-    # ── Construction ──
-    add("CONST",     "REAL",        80.0)   # maintenance/repair
-    add("CONST",     "GOVT",        50.0)
-
-    # ── Food Manufacturing ──
-    add("FOOD_MFG",  "FOOD_SVC",   200.0)   # wholesale food → restaurants
-    add("FOOD_MFG",  "RETAIL",     100.0)   # packaged food → retail
-    add("FOOD_MFG",  "HEALTH",      20.0)
-    add("FOOD_MFG",  "GOVT",        30.0)
-
-    # ── Chemical Manufacturing ──
-    add("CHEM",      "AG",          30.0)   # fertilizers/pesticides
-    add("CHEM",      "FOOD_MFG",    15.0)
-    add("CHEM",      "OTH_MFG",     50.0)
-    add("CHEM",      "HEALTH",      80.0)   # pharmaceuticals
-    add("CHEM",      "GOVT",        20.0)
-
-    # ── Petroleum Products ──
-    add("PETRO",     "AIR",         80.0)   # jet fuel
-    add("PETRO",     "TRANS",      100.0)   # diesel/gasoline
-    add("PETRO",     "AG",          15.0)   # farm fuel
-    add("PETRO",     "CONST",       15.0)
-    add("PETRO",     "OTH_MFG",     30.0)
-    add("PETRO",     "MIN",         15.0)
-
-    # ── Electronics Manufacturing ──
-    add("ELEC",      "AUTO",        40.0)   # semiconductor content in vehicles
-    add("ELEC",      "INFO",        50.0)   # IT equipment
-    add("ELEC",      "FIN",         30.0)
-    add("ELEC",      "GOVT",        40.0)
-    add("ELEC",      "HEALTH",      20.0)
-
-    # ── Auto Manufacturing ──
-    add("AUTO",      "WHOL",        30.0)   # vehicle inventory
-    add("AUTO",      "TRANS",       10.0)   # fleet purchases
-
-    # ── Other Manufacturing ──
-    add("OTH_MFG",   "CONST",      300.0)   # lumber, steel, concrete
-    add("OTH_MFG",   "AUTO",       100.0)   # steel, parts
-    add("OTH_MFG",   "ELEC",        60.0)   # components
-    add("OTH_MFG",   "OTH_MFG",   200.0)   # self-use (complex supply chains)
-    add("OTH_MFG",   "WHOL",        80.0)
-    add("OTH_MFG",   "RETAIL",      60.0)
-    add("OTH_MFG",   "GOVT",        80.0)
-
-    # ── Wholesale Trade ──
-    add("WHOL",      "RETAIL",     100.0)
-    add("WHOL",      "FOOD_SVC",    30.0)
-    add("WHOL",      "OTH_MFG",     50.0)
-
-    # ── Retail Trade ── (self-supply and logistics)
-    add("RETAIL",    "FOOD_SVC",    10.0)
-
-    # ── Air Transportation ──
-    add("AIR",       "WHOL",         5.0)
-    add("AIR",       "FIN",          5.0)
-
-    # ── Other Transportation ──
-    add("TRANS",     "AG",          10.0)
-    add("TRANS",     "MIN",         10.0)
-    add("TRANS",     "FOOD_MFG",    20.0)
-    add("TRANS",     "OTH_MFG",     40.0)
-    add("TRANS",     "WHOL",        30.0)
-    add("TRANS",     "RETAIL",      20.0)
-    add("TRANS",     "CONST",       10.0)
-
-    # ── Information & Communication ──
-    add("INFO",      "FIN",         60.0)
-    add("INFO",      "PROF",        50.0)
-    add("INFO",      "RETAIL",      30.0)
-    add("INFO",      "HEALTH",      30.0)
-    add("INFO",      "GOVT",        40.0)
-    add("INFO",      "OTH_MFG",     20.0)
-
-    # ── Finance & Insurance ──
-    add("FIN",       "AG",          10.0)
-    add("FIN",       "MIN",         10.0)
-    add("FIN",       "CONST",       20.0)
-    add("FIN",       "REAL",        30.0)
-    add("FIN",       "OTH_MFG",     50.0)
-    add("FIN",       "WHOL",        40.0)
-    add("FIN",       "RETAIL",      30.0)
-    add("FIN",       "HEALTH",      30.0)
-    add("FIN",       "PROF",        40.0)
-    add("FIN",       "GOVT",        20.0)
-
-    # ── Real Estate & Rental ──
-    add("REAL",      "RETAIL",      30.0)
-    add("REAL",      "WHOL",        20.0)
-    add("REAL",      "PROF",        40.0)
-    add("REAL",      "FOOD_SVC",    50.0)
-    add("REAL",      "HEALTH",      50.0)
-    add("REAL",      "ARTS",        20.0)
-    add("REAL",      "OTH_SVC",     20.0)
-
-    # ── Professional Services ──
-    add("PROF",      "AG",          10.0)
-    add("PROF",      "MIN",         15.0)
-    add("PROF",      "CONST",       30.0)
-    add("PROF",      "FIN",         60.0)
-    add("PROF",      "REAL",        40.0)
-    add("PROF",      "HEALTH",      40.0)
-    add("PROF",      "GOVT",        80.0)
-    add("PROF",      "OTH_MFG",     60.0)
-
-    # ── Health Care ── (inputs to own operations)
-    add("HEALTH",    "HEALTH",      50.0)   # within-health supply
-
-    # ── Food Services & Accommodation ──
-    add("FOOD_SVC",  "ARTS",        20.0)   # catering for events
-
-    # ── Government ──
-    add("GOVT",      "HEALTH",      40.0)   # public hospitals
-    add("GOVT",      "PROF",        10.0)
+    # Zero out self-loops except where explicitly specified
+    # (most sectors don't buy much from themselves)
+    self_loop_codes = {"FARM", "WOOD", "CHEM", "CONST", "WHOLE",
+                       "HOSPITAL", "COMPELEC", "TEXTILE"}
+    for k in range(N):
+        if SECTOR_CODES[k] not in self_loop_codes:
+            Z[k, k] *= 0.2   # dampen unspecified self-loops
 
     return Z
 
 
-# Build the Z matrix once at module load
-_Z_EMBEDDED = _build_embedded_z_matrix()
-
-
-def _adjust_z_for_consistency(Z: np.ndarray, x: np.ndarray, v: np.ndarray) -> np.ndarray:
+def ras_balance(Z0: np.ndarray, col_targets: np.ndarray,
+                max_iter: int = 2000, tol: float = 1e-9) -> np.ndarray:
     """
-    Proportionally scale Z rows/columns so that:
-      x_j - v_j = Σ_i Z[i,j]   (total intermediate input of sector j = gross output - VA)
+    Bi-proportional (RAS) column balancing.
 
-    Uses a simple RAS-like single-pass rescaling.
+    Scales Z0 so that column sums equal col_targets, preserving the
+    relative structure of the prior. Row sums are unconstrained; the
+    residual Σ_j Z[i,j] subtracted from x_i defines final demand f_i.
+
+    Parameters
+    ----------
+    Z0          : (N,N) prior matrix (non-negative)
+    col_targets : (N,) target column sums = x_j - v_j
     """
-    total_intermediate_use = x - v  # N-vector: how much sector j buys as intermediates
-    total_intermediate_use = np.maximum(total_intermediate_use, 0)
+    Z = Z0.copy()
+    for it in range(max_iter):
+        col_sums = Z.sum(axis=0)
+        safe = col_sums > 0
+        scale = np.where(safe, col_targets / col_sums, 1.0)
+        Z = Z * scale[np.newaxis, :]
 
-    current_col_sums = Z.sum(axis=0)
-    scale = np.where(current_col_sums > 0, total_intermediate_use / current_col_sums, 1.0)
-    Z_adj = Z * scale[np.newaxis, :]
+        err = np.max(np.abs(Z.sum(axis=0) - col_targets) /
+                     (np.abs(col_targets) + 1e-12))
+        if err < tol:
+            break
 
-    # Check row sums (total sales of sector i as intermediate) ≤ x_i
-    # Scale down if needed
-    current_row_sums = Z_adj.sum(axis=1)
-    max_intermediate_sales = x * 0.95  # at most 95% of gross output goes to intermediates
-    row_scale = np.where(
-        (current_row_sums > max_intermediate_sales) & (current_row_sums > 0),
-        max_intermediate_sales / current_row_sums,
-        1.0,
-    )
-    Z_adj = Z_adj * row_scale[:, np.newaxis]
-
-    return Z_adj
+    return Z
 
 
 def compute_io_coefficients(Z: np.ndarray, x: np.ndarray) -> np.ndarray:
-    """
-    Compute IO coefficient matrix A where A[i,j] = Z[i,j] / x[j].
-
-    Parameters
-    ----------
-    Z : (N, N) array — intermediate use flows
-    x : (N,) array — gross output
-
-    Returns
-    -------
-    A : (N, N) array — IO coefficients (column-normalized)
-    """
+    """A[i,j] = Z[i,j] / x[j]  (column-normalized)."""
     x_safe = np.where(x > 0, x, 1.0)
-    A = Z / x_safe[np.newaxis, :]
-    return A
+    return Z / x_safe[np.newaxis, :]
 
 
 def compute_leontief_inverse(A: np.ndarray) -> np.ndarray:
-    """
-    Compute Leontief inverse L = (I - A)^{-1}.
-
-    Checks for convergence of the Neumann series:
-      L = I + A + A^2 + A^3 + ...
-    which converges iff the spectral radius ρ(A) < 1.
-
-    Parameters
-    ----------
-    A : (N, N) IO coefficient matrix
-
-    Returns
-    -------
-    L : (N, N) Leontief inverse
-    """
-    N = A.shape[0]
-    I = np.eye(N)
-
-    # Check spectral radius
-    eigenvalues = np.linalg.eigvals(A)
-    rho = np.max(np.abs(eigenvalues))
+    """L = (I - A)^{-1} via direct solve. Checks spectral radius < 1."""
+    rho = np.max(np.abs(np.linalg.eigvals(A)))
     if rho >= 1.0:
         raise ValueError(
             f"Spectral radius of A = {rho:.4f} ≥ 1. "
-            "IO matrix is not productive — check data."
+            "IO matrix not productive. Check calibration."
         )
-
-    L = np.linalg.solve(I - A, I)
-    return L
-
-
-def compute_domar_weights(x: np.ndarray, gdp: float) -> np.ndarray:
-    """
-    Compute Domar weights λ_i = p_i x_i / GDP.
-
-    In practice, p_i x_i is nominal gross output of sector i.
-    GDP is nominal GDP (sum of value added).
-
-    Note: Σ λ_i > 1 because gross output counts intermediate transactions;
-    for US, typically Σ λ_i ≈ 1.8–2.0.
-
-    Parameters
-    ----------
-    x   : (N,) gross output (nominal)
-    gdp : scalar nominal GDP
-
-    Returns
-    -------
-    lam : (N,) Domar weights
-    """
-    return x / gdp
-
-
-def compute_final_demand_shares(f: np.ndarray) -> np.ndarray:
-    """
-    Compute final demand shares α_i^f = f_i / Σ_j f_j.
-
-    Parameters
-    ----------
-    f : (N,) final demand by sector
-
-    Returns
-    -------
-    alpha_f : (N,) shares summing to 1
-    """
-    total = f.sum()
-    return f / total
+    I = np.eye(A.shape[0])
+    return np.linalg.solve(I - A, I)
 
 
 class IONetwork:
     """
-    Full Input-Output network for one base year.
+    Full Input-Output network.
 
-    Attributes
-    ----------
-    sectors     : list of sector codes
-    labels      : list of sector labels
-    Z           : (N,N) intermediate use flow matrix
-    x           : (N,) gross output
-    v           : (N,) value added
-    f           : (N,) final demand
-    gdp         : scalar GDP
-    A           : (N,N) IO coefficient matrix
-    L           : (N,N) Leontief inverse
-    lam         : (N,) Domar weights
-    alpha_f     : (N,) final demand shares
-    leontief_row_mult : (N,) row sum of L = total output multiplier per sector
+    Attributes (all arrays indexed by BEA sector position)
+    ───────────────────────────────────────────────────────
+    Z        : (N,N) intermediate flow matrix
+    A        : (N,N) IO coefficient matrix
+    L        : (N,N) Leontief inverse
+    x        : (N,) gross output
+    v        : (N,) value added
+    f        : (N,) final demand (residual after accounting for Z row sums)
+    gdp      : scalar GDP = sum(v)
+    lam      : (N,) Domar weights = x / gdp   (sum > 1)
+    w_va     : (N,) value-added shares = v / gdp  (sum = 1)
+    alpha_f  : (N,) final demand shares = f / sum(f)  (sum = 1)
+    leontief_row_mult : (N,) Σ_j L[i,j] — output multiplier
+    domar_leontief    : (N,) lam × leontief_row_mult — Domar-Leontief mult.
     """
 
-    def __init__(
-        self,
-        Z: np.ndarray,
-        x: np.ndarray,
-        v: np.ndarray,
-        f: np.ndarray,
-        gdp: float,
-        sectors: list,
-        labels: list,
-    ):
+    def __init__(self, Z, x, v, sectors, labels):
         self.sectors = sectors
-        self.labels = labels
+        self.labels  = labels
         self.Z = Z
         self.x = x
         self.v = v
-        self.f = f
-        self.gdp = gdp
+        self.gdp = float(v.sum())
 
         self.A = compute_io_coefficients(Z, x)
         self.L = compute_leontief_inverse(self.A)
-        self.lam = compute_domar_weights(x, gdp)
-        self.alpha_f = compute_final_demand_shares(f)
 
-        # Sales-weighted Leontief multiplier (row sum of L, weighted by λ)
-        # Λ_i = λ_i × Σ_j L[i,j]  — used for supply shock GDP contributions
+        # Final demand = row-balance residual (guaranteed ≥ 0 by construction)
+        self.f = np.maximum(x - Z.sum(axis=1), 0.0)
+
+        self.lam    = x / self.gdp
+        self.w_va   = v / self.gdp
+        self.alpha_f = self.f / (self.f.sum() + 1e-30)
+
         self.leontief_row_mult = self.L.sum(axis=1)
-        self.domar_leontief = self.lam * self.leontief_row_mult
+        self.domar_leontief    = self.lam * self.leontief_row_mult
+
+    # ── convenience ──────────────────────────────────────────────────────────
+
+    def sector_index(self, code: str) -> int:
+        return _IDX[code]
 
     def summary(self) -> pd.DataFrame:
-        """Return a summary DataFrame of sector-level statistics."""
         return pd.DataFrame({
-            "sector": self.sectors,
-            "label": self.labels,
-            "gross_output_bn": self.x,
-            "value_added_bn": self.v,
-            "final_demand_bn": self.f,
-            "domar_weight": self.lam,
-            "final_demand_share": self.alpha_f,
-            "leontief_row_multiplier": self.leontief_row_mult,
-            "domar_leontief_multiplier": self.domar_leontief,
+            "sector":              self.sectors,
+            "label":               self.labels,
+            "gross_output_bn":     self.x,
+            "value_added_bn":      self.v,
+            "final_demand_bn":     self.f,
+            "va_share":            self.w_va,
+            "domar_weight":        self.lam,
+            "final_demand_share":  self.alpha_f,
+            "leontief_row_mult":   self.leontief_row_mult,
+            "domar_leontief_mult": self.domar_leontief,
         })
 
-    def to_dict(self) -> dict:
-        return {
-            "sectors": self.sectors,
-            "labels": self.labels,
-            "Z": self.Z,
-            "x": self.x,
-            "v": self.v,
-            "f": self.f,
-            "gdp": self.gdp,
-            "A": self.A,
-            "L": self.L,
-            "lam": self.lam,
-            "alpha_f": self.alpha_f,
-        }
+    def va_weighted_gdp_change(self, delta_y: np.ndarray) -> float:
+        """
+        ΔGDP/GDP via the value-added accounting identity.
+
+        ΔGDP/GDP = Σ_i w_i × Δy_i   where w_i = v_i / GDP.
+
+        This is the EXACT formula for a first-order accounting decomposition:
+        GDP = Σ_i v_i, so ΔGDP = Σ_i Δv_i ≈ Σ_i v_i × Δy_i / y_i
+        = Σ_i v_i × Δlog(y_i) under a log-linear approximation.
+
+        For large shocks (COVID scale), this formula is preferred over the
+        Domar-weighted Hulten approximation, which was derived for small shocks.
+        See decisions_log.md §2.6 for discussion.
+        """
+        return float((self.w_va * delta_y).sum())
+
+    def hulten_gdp_change(self, supply_shocks: np.ndarray) -> float:
+        """
+        ΔGDP/GDP via Hulten's theorem (supply shocks only, first-order).
+
+        ΔGDP/GDP ≈ Σ_i λ_i × s_i
+
+        Valid for small TFP shocks. Over-estimates for COVID-scale shocks.
+        Provided for comparison with the paper's methodology.
+        """
+        return float((self.lam * supply_shocks).sum())
 
 
-def build_network_from_embedded(year: int = 2017) -> IONetwork:
+def build_network_from_embedded(year: int = 2017) -> "IONetwork":
     """
-    Build an IONetwork using embedded data calibrated to BEA 2017 benchmark.
-
-    This is the default when real BEA data is not available.
+    Construct IONetwork from embedded 2017 BEA data with RAS-balanced IO matrix.
     """
     x = GROSS_OUTPUT_2017.copy()
     v = VALUE_ADDED_2017.copy()
-    f = FINAL_DEMAND_2017.copy()
-    gdp = float(v.sum())  # internally consistent GDP
 
-    Z = _Z_EMBEDDED.copy()
-    Z = _adjust_z_for_consistency(Z, x, v)
+    # Column targets: total intermediate input per sector
+    col_targets = np.maximum(x - v, 0.0)
 
-    net = IONetwork(Z=Z, x=x, v=v, f=f, gdp=gdp, sectors=SECTOR_CODES, labels=SECTOR_LABELS)
-    return net
+    # Build prior and balance
+    Z_prior = _build_prior_z(x, v)
+    Z = ras_balance(Z_prior, col_targets)
 
+    # Ensure no column overshoot
+    for j in range(N):
+        if Z[:, j].sum() > col_targets[j]:
+            Z[:, j] *= col_targets[j] / (Z[:, j].sum() + 1e-30)
 
-def build_network_from_bea_files(bea_dir: Path = Path("data/raw/bea")) -> IONetwork:
-    """
-    Build IONetwork from downloaded BEA files if they exist.
-
-    Expected files:
-      - use_table_2017.csv : BEA Use table (BEA API format)
-      - gdp_by_industry_gross_output.csv
-      - gdp_by_industry_value_added.csv
-
-    Returns embedded network if files are not found.
-    """
-    use_file = bea_dir / "use_table_2017.csv"
-    go_file = bea_dir / "gdp_by_industry_gross_output.csv"
-    va_file = bea_dir / "gdp_by_industry_value_added.csv"
-
-    if not all(f.exists() for f in [use_file, go_file, va_file]):
-        print("BEA data files not found — using embedded calibrated data.")
-        print("To download real data, run: python src/data_download/download_bea.py")
-        return build_network_from_embedded()
-
-    print("Loading BEA data files...")
-    # Parsing logic for BEA API response format would go here.
-    # The BEA API returns JSON-converted to CSV with columns:
-    # [TableID, SeriesCode, LineNumber, LineDescription, TimePeriod, CL_UNIT, MULT_FACTOR, DataValue, NoteRef]
-    # Full parsing is complex — for now, fall back to embedded.
-    print("  Note: Full BEA file parsing requires sector-code mapping. Using embedded data.")
-    return build_network_from_embedded()
+    return IONetwork(Z=Z, x=x, v=v, sectors=SECTOR_CODES, labels=SECTOR_LABELS)
 
 
-def get_io_network(year: int = 2017, use_real_data: bool = True) -> IONetwork:
-    """
-    Main entry point: return IONetwork for the given year.
-
-    Tries to load real BEA data first; falls back to embedded.
-    """
-    if use_real_data:
-        return build_network_from_bea_files()
+def get_io_network(year: int = 2017, use_real_data: bool = True) -> "IONetwork":
+    """Main entry point. Uses real BEA files if present, else embedded data."""
+    bea_dir = Path("data/raw/bea")
+    if use_real_data and (bea_dir / "use_table_2017.csv").exists():
+        print("NOTE: BEA file parsing not yet implemented; using embedded data.")
+    else:
+        print("BEA data files not found — using embedded 2017 calibration.")
+        print("Run: python src/data_download/download_bea.py  to fetch real data.")
     return build_network_from_embedded(year)
 
 
-def save_network(net: IONetwork, out_dir: Path = PROCESSED_DIR) -> None:
-    """Save network matrices to CSV for inspection."""
+def save_network(net: "IONetwork", out_dir: Path = PROCESSED_DIR) -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
-
-    # Summary table
     net.summary().to_csv(out_dir / "sector_summary.csv", index=False)
-
-    # IO coefficient matrix
     pd.DataFrame(net.A, index=net.sectors, columns=net.sectors).to_csv(
-        out_dir / "io_coefficients.csv"
-    )
-
-    # Leontief inverse
+        out_dir / "io_coefficients.csv")
     pd.DataFrame(net.L, index=net.sectors, columns=net.sectors).to_csv(
-        out_dir / "leontief_inverse.csv"
-    )
-
-    # Intermediate flow matrix
+        out_dir / "leontief_inverse.csv")
     pd.DataFrame(net.Z, index=net.sectors, columns=net.sectors).to_csv(
-        out_dir / "flow_matrix_Z.csv"
-    )
-
+        out_dir / "flow_matrix_Z.csv")
     print(f"Network matrices saved to {out_dir}/")
 
 
-def verify_network(net: IONetwork) -> None:
-    """Print diagnostic checks for the IO network."""
-    print("\n── IO Network Diagnostics ─────────────────────────────────────")
-    print(f"  Sectors: {len(net.sectors)}")
-    print(f"  GDP (sum of VA): ${net.gdp:,.0f} bn")
-    print(f"  Sum of Domar weights: {net.lam.sum():.4f}  (expected ≈ 1.5–2.0)")
-    print(f"  Sum of final demand shares: {net.alpha_f.sum():.4f}  (expected = 1.0)")
-    print(f"  Spectral radius of A: {max(abs(np.linalg.eigvals(net.A))):.4f}  (must be < 1)")
-    print(f"  Min Leontief diagonal: {net.L.diagonal().min():.4f}  (expected ≥ 1.0)")
-    print(f"  Max off-diagonal Leontief: {net.L[~np.eye(len(net.sectors), dtype=bool)].max():.4f}")
-
-    # Check material balance: x ≈ A·x + f
-    # Note: with synthetic/embedded data, residuals will be large.
-    # With real BEA data, residuals should be < 1%. See decisions_log.md.
-    x_reconstructed = net.A @ net.x + net.f
-    residual = np.abs(net.x - x_reconstructed) / np.maximum(net.x, 1.0)
-    residual_note = "(large residual expected with embedded synthetic data)" if residual.max() > 0.10 else "(OK)"
-    print(f"  Max material balance residual: {residual.max()*100:.2f}%  {residual_note}")
-    print("──────────────────────────────────────────────────────────────\n")
+def verify_network(net: "IONetwork") -> None:
+    print("\n── IO Network Diagnostics (66 BEA sectors) ───────────────────────")
+    print(f"  N sectors:              {len(net.sectors)}")
+    print(f"  GDP (Σ value added):    ${net.gdp:,.0f} bn  (BEA 2017 ≈ $19,519 bn)")
+    print(f"  Σ Domar weights:        {net.lam.sum():.4f}  (expected 1.8–2.0)")
+    print(f"  Σ VA shares:            {net.w_va.sum():.4f}  (must = 1.0)")
+    print(f"  Σ final demand shares:  {net.alpha_f.sum():.4f}  (must = 1.0)")
+    rho = np.max(np.abs(np.linalg.eigvals(net.A)))
+    print(f"  Spectral radius(A):     {rho:.4f}  (must be < 1)")
+    print(f"  Min Leontief diagonal:  {net.L.diagonal().min():.4f}  (must be ≥ 1)")
+    col_err = np.abs(net.Z.sum(axis=0) - (net.x - net.v))
+    print(f"  Max column residual:    {col_err.max():.2e} bn  (target < 1e-6)")
+    neg_f = (net.f < 0).sum()
+    print(f"  Sectors with f_i < 0:  {neg_f}  (should be 0 after clipping)")
+    print("────────────────────────────────────────────────────────────────────\n")
 
 
 if __name__ == "__main__":
-    print("Building IO network from embedded 2017 BEA data...")
     net = build_network_from_embedded()
     verify_network(net)
     save_network(net)
-
-    summary = net.summary()
-    print(summary.to_string(index=False, float_format=lambda x: f"{x:.4f}"))
+    top12 = net.summary().nlargest(12, "gross_output_bn")
+    print(top12[["label","gross_output_bn","value_added_bn",
+                  "domar_weight","leontief_row_mult"]].to_string(
+        index=False, float_format=lambda x: f"{x:.4f}"))

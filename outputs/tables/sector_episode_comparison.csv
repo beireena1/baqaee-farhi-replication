@@ -1,24 +1,67 @@
 sector,label,covid_delta_y_pct,covid_delta_p_pct,covid_supply_contrib_pct,covid_demand_contrib_pct,covid_total_contrib_pct,infl_delta_y_pct,infl_delta_p_pct,infl_supply_contrib_pct,infl_demand_contrib_pct,infl_total_contrib_pct,role_reversal
-AG,Agriculture & Forestry,-3.000,-3.000,0.059,-0.038,0.021,2.000,21.000,-0.781,0.105,-0.675,True
-AIR,Air Transportation,-70.000,-20.000,-0.646,-0.703,-1.350,38.000,22.000,0.207,0.499,0.706,False
-ARTS,"Arts, Entertainment & Recreation",-56.000,-10.000,-0.405,-0.564,-0.969,28.000,8.000,0.158,0.323,0.481,False
-AUTO,Motor Vehicles Manufacturing,-42.000,-4.000,-0.498,-0.922,-1.420,-8.000,18.000,-0.644,0.200,-0.444,True
-CHEM,Chemical Manufacturing,-6.000,-2.000,-0.021,-0.084,-0.104,4.000,23.000,-1.107,0.227,-0.879,True
-CONST,Construction,-12.000,-1.500,-0.311,-1.044,-1.355,8.500,16.500,-1.235,1.717,0.482,False
-ELEC,Computer & Electronic Mfg,-10.000,-1.500,-0.162,-0.156,-0.317,-4.000,3.000,-0.231,-0.005,-0.236,False
-FIN,Finance & Insurance,-4.000,2.000,-0.699,-0.295,-0.994,9.000,8.500,-1.153,1.487,0.335,False
-FOOD_MFG,Food & Beverage Manufacturing,-4.000,2.500,-0.303,-0.149,-0.452,3.500,19.000,-1.409,0.891,-0.518,False
-FOOD_SVC,Food Services & Accommodation,-43.000,-12.000,-0.310,-2.195,-2.505,22.000,18.500,-0.578,1.690,1.112,False
-GOVT,Government,1.000,0.000,0.322,0.686,1.008,4.000,6.000,0.322,3.565,3.888,False
-HEALTH,Health Care,-18.500,2.000,-2.771,-6.923,-9.694,6.000,5.000,0.135,2.901,3.036,False
-INFO,Information & Communication,2.000,1.000,-0.035,0.153,0.117,12.000,2.500,0.035,0.777,0.812,False
-MIN,Mining & Extraction,-18.000,-28.000,0.602,-0.061,0.541,12.000,35.000,-1.016,0.058,-0.958,True
-OTH_MFG,Other Manufacturing,-18.000,-3.000,-1.641,-0.775,-2.417,5.000,15.000,-5.080,0.738,-4.342,False
-OTH_SVC,Other Services,-20.000,-6.000,-0.055,-0.631,-0.686,18.000,12.000,-0.132,0.728,0.596,False
-PETRO,Petroleum & Coal Products,-30.000,-32.000,0.670,-0.873,-0.204,9.000,34.000,-1.562,0.494,-1.069,True
-PROF,Professional Services,-6.000,-1.500,-0.064,-0.775,-0.839,10.000,8.500,-1.683,1.862,0.179,False
-REAL,Real Estate & Rental,-3.000,-1.500,-1.581,-1.377,-2.958,5.500,13.500,-0.878,4.168,3.290,False
-RETAIL,Retail Trade,-15.000,-2.000,-0.226,-0.986,-1.213,7.500,9.500,-0.528,0.986,0.458,False
-TRANS,Other Transportation,-35.000,-8.000,-0.546,-1.146,-1.693,14.000,18.000,-0.632,0.786,0.154,False
-UTIL,Utilities,-4.000,-2.000,-0.329,-0.196,-0.526,3.000,15.500,-0.521,0.376,-0.145,False
-WHOL,Wholesale Trade,-8.000,-2.500,-0.020,-0.132,-0.152,9.500,9.000,-0.699,0.220,-0.479,True
+ACCOMM,Accommodation,-68.000,-25.000,-0.072,-0.341,-0.412,35.000,16.000,0.013,0.200,0.212,False
+ADMIN,Administrative and support services,-15.000,-2.000,-0.128,-0.243,-0.371,10.000,10.000,0.126,0.122,0.247,True
+AIRTRANS,Air transportation,-67.000,-20.000,-0.266,-0.141,-0.406,38.000,22.000,0.108,0.123,0.230,False
+AMBULAT,Ambulatory health care services,-25.000,2.500,-0.561,-0.401,-0.962,6.000,5.500,0.016,0.215,0.231,False
+AMUSE,"Amusements, gambling, and recreation industries",-60.000,-10.000,-0.168,-0.229,-0.396,30.000,9.000,0.054,0.144,0.198,False
+APPAREL,Apparel and leather and allied products,-30.000,-5.000,-0.011,-0.032,-0.043,5.000,8.000,0.003,0.004,0.007,False
+BROADCAST,Broadcasting and telecommunications,2.500,1.000,0.005,0.041,0.045,6.000,3.000,0.000,0.109,0.109,False
+CHEM,Chemical products,-6.000,-2.000,-0.049,-0.043,-0.092,4.000,23.000,0.055,0.006,0.062,False
+COMPDES,Computer systems design and related services,3.000,1.000,0.019,0.047,0.066,12.000,6.000,0.140,0.124,0.264,False
+COMPELEC,Computer and electronic products,-10.000,-1.500,-0.108,-0.042,-0.150,-4.000,3.000,-0.059,-0.000,-0.060,False
+CONST,Construction,-12.000,-1.500,-0.300,-0.239,-0.539,8.500,16.500,0.258,0.124,0.382,False
+CREDIT,"Federal Reserve banks, credit intermediation",-1.000,2.000,-0.032,-0.001,-0.033,5.000,10.000,0.095,0.069,0.165,False
+EDUC,Educational services,-10.000,0.000,-0.035,-0.047,-0.083,4.000,6.000,0.010,0.023,0.033,False
+ELECEQUIP,"Electrical equipment, appliances, and components",-10.000,-2.000,-0.020,-0.016,-0.037,4.000,10.000,0.012,0.003,0.015,False
+FABMETAL,Fabricated metal products,-15.000,-2.000,-0.071,-0.037,-0.107,8.000,13.000,0.046,0.011,0.057,False
+FARM,Farms,-3.000,-3.000,-0.020,-0.000,-0.020,2.000,21.000,0.013,0.000,0.013,False
+FEDGOV,Federal general government,2.000,0.000,0.067,0.032,0.099,2.000,6.000,0.011,0.088,0.099,False
+FEDGOVE,Federal government enterprises,-3.000,0.000,-0.005,-0.006,-0.012,2.000,6.000,0.001,0.006,0.008,False
+FOOD,"Food, beverage, and tobacco products",-4.000,2.500,-0.046,-0.009,-0.055,3.500,19.000,0.039,0.010,0.048,False
+FOODSVC,Food services and drinking places,-42.000,-12.000,-0.244,-0.795,-1.039,22.000,18.500,0.241,0.304,0.544,False
+FOREST,"Forestry, fishing, and related activities",-5.000,-2.000,-0.010,-0.000,-0.010,6.000,12.000,0.012,0.000,0.012,False
+FUNDS,"Funds, trusts, and other financial vehicles",2.000,0.000,0.003,0.006,0.009,6.000,4.000,0.003,0.025,0.028,False
+FURN,Furniture and related products,-15.000,-2.000,-0.011,-0.027,-0.038,4.000,11.000,0.005,0.005,0.010,False
+HOSPITAL,Hospitals,-15.000,3.000,-0.311,-0.225,-0.535,6.000,7.000,0.011,0.203,0.214,False
+INFODATA,Information and data processing services,5.000,1.500,0.001,0.032,0.033,15.000,2.000,0.010,0.089,0.099,False
+INSURE,Insurance carriers and related activities,1.000,1.000,0.007,0.015,0.022,4.000,12.000,0.053,0.035,0.088,False
+LEGAL,Legal services,-6.000,-1.500,-0.017,-0.056,-0.073,10.000,8.500,0.048,0.073,0.121,False
+MACH,Machinery,-10.000,-2.000,-0.022,-0.050,-0.071,6.000,11.000,0.025,0.018,0.043,True
+MGMT,Management of companies and enterprises,-5.000,-1.000,-0.024,-0.045,-0.069,7.000,7.500,0.039,0.058,0.097,False
+MINE,"Mining, except oil and gas",-12.000,-5.000,-0.053,-0.000,-0.053,8.000,18.000,0.036,0.000,0.036,False
+MINE_SUP,Support activities for mining,-25.000,-5.000,-0.058,-0.000,-0.058,15.000,15.000,0.035,0.000,0.035,False
+MISCMFG,Miscellaneous manufacturing,-12.000,-2.000,-0.013,-0.041,-0.053,8.000,9.000,0.012,0.023,0.036,False
+MISCPROF,"Misc. professional, scientific, and technical svcs",-6.000,-1.500,-0.035,-0.163,-0.198,10.000,8.000,0.151,0.179,0.330,False
+MOTVEH,"Motor vehicles, bodies, trailers, and parts",-42.000,-4.000,-0.145,-0.155,-0.300,-8.000,18.000,-0.048,-0.009,-0.057,True
+MOVIE,Motion picture and sound recording industries,-40.000,-5.000,-0.061,-0.061,-0.122,40.000,5.000,0.061,0.061,0.122,False
+NMMIN,Nonmetallic mineral products,-12.000,-2.000,-0.027,-0.000,-0.027,6.000,14.000,0.014,0.000,0.014,False
+NURSING,Nursing and residential care facilities,-10.000,1.500,-0.040,-0.048,-0.088,5.000,8.000,0.009,0.035,0.044,False
+OILGAS,Oil and gas extraction,-18.000,-30.000,-0.181,-0.000,-0.181,12.000,39.000,0.120,0.000,0.120,False
+OTHERTRANS,Other transportation and support activities,-15.000,-3.000,-0.024,-0.022,-0.046,14.000,12.000,0.020,0.023,0.043,False
+OTHSVC,"Other services, except government",-20.000,-6.000,-0.040,-0.259,-0.298,18.000,12.000,0.065,0.204,0.269,False
+OTRTRANS,Other transportation equipment,-25.000,-2.000,-0.062,-0.063,-0.125,5.000,9.000,0.014,0.011,0.025,True
+PAPER,Paper products,-5.000,-1.500,-0.009,-0.009,-0.018,4.000,14.000,0.012,0.002,0.015,True
+PERFORM,"Performing arts, spectator sports, museums",-70.000,-10.000,-0.102,-0.094,-0.195,28.000,12.000,0.020,0.058,0.078,False
+PETRO,Petroleum and coal products,-30.000,-32.000,-0.088,-0.079,-0.167,9.000,34.000,0.041,0.009,0.050,False
+PIPE,Pipeline transportation,-5.000,-5.000,-0.000,-0.000,-0.009,5.000,20.000,0.009,0.000,0.009,False
+PLASTIC,Plastics and rubber products,-8.000,-2.000,-0.017,-0.023,-0.040,5.000,18.000,0.021,0.004,0.025,True
+PMETAL,Primary metals,-15.000,-5.000,-0.055,-0.000,-0.055,8.000,16.000,0.029,0.000,0.029,False
+PRINT,Printing and related support activities,-15.000,-3.000,-0.006,-0.028,-0.034,3.000,10.000,0.003,0.004,0.007,False
+PUBLISH,Publishing industries (including software),3.000,1.000,0.008,0.025,0.033,12.000,4.000,0.034,0.100,0.133,False
+RAILTRANS,Rail transportation,-15.000,-5.000,-0.019,-0.023,-0.042,15.000,12.000,0.009,0.033,0.042,False
+REALE,Real estate,-4.000,-1.500,-0.417,-0.116,-0.533,5.500,13.500,0.270,0.463,0.733,False
+RENTAL,Rental and leasing services,-10.000,-2.000,-0.034,-0.065,-0.099,8.000,11.000,0.035,0.044,0.079,False
+RETAIL,Retail trade,-18.000,-2.000,-0.374,-0.595,-0.969,7.500,9.500,0.228,0.176,0.404,True
+SECURIT,"Securities, commodity contracts, and investments",0.000,1.000,0.000,0.000,0.000,9.000,6.000,0.080,0.168,0.247,False
+SLGOV,State and local general government,-4.000,0.000,-0.206,-0.080,-0.285,3.000,6.000,0.091,0.123,0.214,False
+SLGOVE,State and local government enterprises,-2.000,0.000,-0.008,-0.008,-0.017,2.000,6.000,0.004,0.013,0.017,False
+SOCIALAS,Social assistance,-5.000,0.000,-0.012,-0.024,-0.036,8.000,6.000,0.008,0.049,0.058,False
+TEXTILE,Textile mills and textile product mills,-20.000,-3.000,-0.014,-0.020,-0.034,4.000,12.000,0.005,0.002,0.007,True
+TRANSIT,Transit and ground passenger transportation,-30.000,-5.000,-0.027,-0.032,-0.060,20.000,6.000,0.016,0.024,0.040,False
+TRUCK,Truck transportation,-8.000,-3.000,-0.004,-0.075,-0.079,10.000,18.000,0.059,0.039,0.099,True
+UTIL,Utilities,-4.000,-2.000,-0.059,-0.000,-0.059,3.000,15.500,0.044,0.000,0.044,False
+WAREHOUSE,Warehousing and storage,-5.000,-2.000,-0.000,-0.015,-0.015,10.000,11.000,0.025,0.006,0.031,True
+WASTE,Waste management and remediation services,-5.000,-1.000,-0.003,-0.013,-0.017,5.000,9.000,0.006,0.011,0.017,False
+WATERTRANS,Water transportation,-8.000,-4.000,-0.009,-0.000,-0.009,8.000,20.000,0.009,0.000,0.009,False
+WHOLE,Wholesale trade,-10.000,-2.500,-0.113,-0.458,-0.571,9.500,9.000,0.300,0.242,0.542,True
+WOOD,Wood products,-10.000,-2.000,-0.031,-0.000,-0.031,6.000,9.000,0.019,0.000,0.019,False

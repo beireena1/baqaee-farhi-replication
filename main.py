@@ -97,7 +97,7 @@ def main():
     print("\nSector summary (top 10 by gross output):")
     top10 = summary.nlargest(10, "gross_output_bn")
     print(top10[["label", "gross_output_bn", "value_added_bn", "domar_weight",
-                  "leontief_row_multiplier"]].to_string(
+                  "leontief_row_mult"]].to_string(
         index=False, float_format=lambda x: f"{x:.4f}"
     ))
 

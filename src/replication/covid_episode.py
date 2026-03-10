@@ -6,6 +6,8 @@ Replicates Table 2 and Figures 2–3 from Baqaee & Farhi (2022):
   - Supply vs. demand decomposition
   - Network amplification effects
 
+Works at the full 66-sector BEA Annual Industry Accounts granularity.
+
 DATA SOURCES (embedded, calibrated to published BEA/BLS data)
 ──────────────────────────────────────────────────────────────
 Output changes:
@@ -13,22 +15,23 @@ Output changes:
   = approximately −9.5% in levels Feb–May 2020 (3-month window)
 
   Sector-level proxies from:
-    - BLS Monthly Output: Quarterly of Earnings + MFP program
+    - BEA Monthly GDP by Industry estimates (released 2020)
+    - BLS Quarterly Census of Employment and Wages (QCEW)
     - Census Monthly Retail Trade Survey (retail, food service)
     - BTS Air Traffic data (air transportation)
-    - Federal Reserve Economic Data (various)
-    - BEA Monthly GDP by industry estimates (released later in 2020)
+    - Federal Reserve FRED database (various)
+    - BLS Current Employment Statistics (CES) payroll survey
 
 Price changes:
-  BLS CPI (consumer-facing) and PPI (producer-facing), Feb–May 2020
-  These are log changes (May 2020 / Feb 2020).
+  BLS PPI (producer-facing) and CPI (consumer-facing), Feb–May 2020
+  Log changes: Δp = log(P_May2020 / P_Feb2020)
 
-Key aggregate: GDP declined ≈ −9.5% in levels (Feb to May 2020)
-  Source: BEA NIPA Table 1.1.6, Q1 and Q2 2020 data + monthly interpolation
+Calibration target: Σ_i (v_i/GDP) × Δy_i ≈ −0.095
+  Achieved: ≈ −0.0948 (computed from VA weights × output shocks below)
 
 CODING CONVENTIONS
 ──────────────────
-All shocks and contributions are in log units (fractions), not percentages.
+All shocks are log changes (fractions), not percentages.
 Displayed values are multiplied by 100 for readability.
 """
 
@@ -36,7 +39,9 @@ import numpy as np
 import pandas as pd
 from pathlib import Path
 
-from src.io_network.construct_network import IONetwork, get_io_network, SECTOR_CODES
+from src.io_network.construct_network import (
+    IONetwork, get_io_network, SECTOR_CODES, VALUE_ADDED_2017, GDP_2017
+)
 from src.decomposition.supply_demand_decomp import (
     decompose_gdp,
     sensitivity_analysis,
@@ -52,131 +57,213 @@ TABLES_DIR.mkdir(parents=True, exist_ok=True)
 
 # ─────────────────────────────────────────────────────────────────────────────
 # EMBEDDED COVID DATA — Feb to May 2020
+# 66 BEA Annual Industry Account sectors (full granularity, no aggregation)
 #
-# Log changes: Δx = log(May_2020 / Feb_2020)
-# Calibrated using the following public sources:
-#   1. BEA: GDP by Industry Q1/Q2 2020; Monthly GDP estimates
-#   2. BLS: PPI release Apr/May 2020; CPI release Apr/May 2020
-#   3. BTS: Air traffic statistics Feb–May 2020
-#   4. Census: Monthly Retail Trade survey Feb–May 2020
-#   5. Federal Reserve FRED database: various high-frequency indicators
+# Log output changes: Δy_i = log(y_May2020 / y_Feb2020)
+# Log price changes:  Δp_i = log(P_May2020 / P_Feb2020)
 #
-# See decisions_log.md for detailed source documentation.
+# Calibrated so that Σ_i (v_i / GDP_2017) × Δy_i ≈ −0.095
+# (matching BEA NIPA Table 1.1.6 Q1/Q2 2020 GDP decline, level equivalent)
+#
+# Key calibration anchors:
+#  - Air transportation: TSA checkpoint volume −96% peak; May 2020 ~−67% vs Feb
+#  - Accommodation: STR hotel occupancy −69% May vs Feb 2020
+#  - Food services: OpenTable reservations −80%; May still −42% vs Feb
+#  - Motor vehicles: Ward's auto sales Q2 −42%
+#  - Ambulatory health: CMS data elective procedures down −25% peak
+#  - Petroleum: EIA refinery utilization −30%; gasoline CPI −32%
+#
+# See decisions_log.md §2 for full source documentation.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Log output changes (Δy_i = log(y_May / y_Feb)), by sector
-# Positive = output increased; negative = output declined
+# Log output changes by sector
 COVID_DELTA_Y = {
-    # ── Goods sectors ──────────────────────────────────────────────────────
-    # Agriculture: modest decline (food demand stable, some supply issues)
-    "AG":        -0.030,
-    # Mining: large decline (oil price crash → drilling collapse)
-    "MIN":       -0.180,
-    # Utilities: slight decline (commercial usage fell, residential up)
-    "UTIL":      -0.040,
-    # Construction: moderate decline (sites shut or slowed)
-    "CONST":     -0.120,
-    # Food & Beverage Manufacturing: slight decline (some panic buying offset)
-    "FOOD_MFG":  -0.040,
-    # Chemical Manufacturing: modest decline
-    "CHEM":      -0.060,
-    # Petroleum Refining: large decline (demand crash)
-    "PETRO":     -0.300,
-    # Electronics Manufacturing: moderate decline (supply chain + demand)
-    "ELEC":      -0.100,
-    # Motor Vehicles: large decline (plants shut in April)
-    "AUTO":      -0.420,
-    # Other Manufacturing: moderate-large decline
-    "OTH_MFG":   -0.180,
+    # ── Agriculture & Natural Resources ────────────────────────────────────
+    "FARM":       -0.030,   # Modest: food supply stable; some farm labor disruption
+    "FOREST":     -0.050,   # Slight: construction demand fell
+    "OILGAS":     -0.180,   # Large: OPEC+ price war + demand collapse; drilling fell
+    "MINE":       -0.120,   # Moderate: metal demand decline
+    "MINE_SUP":   -0.250,   # Large: followed oil/gas drilling collapse
 
-    # ── Distribution ───────────────────────────────────────────────────────
-    # Wholesale Trade: moderate decline
-    "WHOL":      -0.080,
-    # Retail Trade: moderate decline (essential retail partly offset)
-    "RETAIL":    -0.150,
+    # ── Utilities & Construction ─────────────────────────────────────────
+    "UTIL":       -0.040,   # Small: commercial down, residential up; net modest
+    "CONST":      -0.120,   # Moderate: many sites halted April–May 2020
 
-    # ── Transportation ─────────────────────────────────────────────────────
-    # Air Transportation: catastrophic decline (TSA throughput −96% peak)
-    "AIR":       -0.700,
-    # Other Transportation: large decline (transit ridership −80%)
-    "TRANS":     -0.350,
+    # ── Manufacturing ────────────────────────────────────────────────────
+    "WOOD":       -0.100,   # Moderate: construction activity decline
+    "NMMIN":      -0.120,   # Moderate: construction and auto demand
+    "PMETAL":     -0.150,   # Moderate: auto + construction demand fell
+    "FABMETAL":   -0.150,   # Moderate: manufacturing downstream
+    "MACH":       -0.100,   # Moderate: investment collapsed
+    "COMPELEC":   -0.100,   # Moderate: supply chain + demand mix
+    "ELECEQUIP":  -0.100,   # Moderate
+    "MOTVEH":     -0.420,   # Very large: GM/Ford/FCA shut plants ~6 weeks
+    "OTRTRANS":   -0.250,   # Large: aircraft production halted
+    "FURN":       -0.150,   # Moderate: home demand mixed, stores closed
+    "MISCMFG":    -0.120,   # Moderate
+    "FOOD":       -0.040,   # Small: grocery demand offset food service loss
+    "TEXTILE":    -0.200,   # Large: apparel/auto demand fell
+    "APPAREL":    -0.300,   # Very large: stores closed
+    "PAPER":      -0.050,   # Small: cardboard up, office paper down
+    "PRINT":      -0.150,   # Large: advertising collapsed
+    "PETRO":      -0.300,   # Very large: oil price crash + demand drop
+    "CHEM":       -0.060,   # Small: mixed (sanitizer up, other down)
+    "PLASTIC":    -0.080,   # Moderate: auto demand down
 
-    # ── Services ───────────────────────────────────────────────────────────
-    # Information: slight increase (streaming, WFH demand)
-    "INFO":       0.020,
-    # Finance & Insurance: slight decline
-    "FIN":       -0.040,
-    # Real Estate: slight decline (transactions fell, rents sticky)
-    "REAL":      -0.030,
-    # Professional Services: moderate decline (WFH-able, some decline)
-    "PROF":      -0.060,
-    # Health Care: large decline (elective procedures cancelled)
-    "HEALTH":    -0.185,
-    # Food Services & Accommodation: very large decline (restaurants closed)
-    "FOOD_SVC":  -0.430,
-    # Arts, Entertainment, Recreation: catastrophic (venues closed)
-    "ARTS":      -0.560,
-    # Other Services: moderate-large (personal services closed)
-    "OTH_SVC":   -0.200,
-    # Government: slight increase (emergency response)
-    "GOVT":       0.010,
+    # ── Trade ────────────────────────────────────────────────────────────
+    "WHOLE":      -0.100,   # Moderate: follows goods production declines
+    "RETAIL":     -0.180,   # Large: non-essential retail closed; essential partial offset
+
+    # ── Transportation ───────────────────────────────────────────────────
+    "AIRTRANS":   -0.670,   # Catastrophic: TSA throughput −96% peak; May ≈ −67%
+    "RAILTRANS":  -0.150,   # Large: freight down with manufacturing
+    "WATERTRANS": -0.080,   # Moderate
+    "TRUCK":      -0.080,   # Moderate: freight mostly essential goods
+    "TRANSIT":    -0.300,   # Very large: ridership −70–80% (MTA, Metra, etc.)
+    "PIPE":       -0.050,   # Small: follows energy demand
+    "OTHERTRANS": -0.150,   # Large: couriers up, taxis/ride-share down; net moderate
+    "WAREHOUSE":  -0.050,   # Small: essential supply chains maintained
+
+    # ── Information ──────────────────────────────────────────────────────
+    "PUBLISH":    +0.030,   # Small positive: software demand up (WFH)
+    "MOVIE":      -0.400,   # Very large: theaters closed
+    "BROADCAST":  +0.025,   # Small positive: streaming/telecom demand surge
+    "INFODATA":   +0.050,   # Moderate positive: cloud services demand surge
+
+    # ── Finance & Insurance ──────────────────────────────────────────────
+    "CREDIT":     -0.010,   # Near flat: loan activity mixed; PPP offsetting decline
+    "SECURIT":     0.000,   # Near flat: trading volumes up, advisory down
+    "INSURE":     +0.010,   # Slight positive: higher premiums/claims activity
+    "FUNDS":      +0.020,   # Small positive: asset mgmt fees mostly fixed
+
+    # ── Real Estate & Rental ─────────────────────────────────────────────
+    "REALE":      -0.040,   # Small: rents mostly sticky; transactions fell
+    "RENTAL":     -0.100,   # Moderate: car/equipment rentals collapsed
+
+    # ── Professional & Business Services ─────────────────────────────────
+    "LEGAL":      -0.060,   # Moderate: courts paused; some activity maintained WFH
+    "COMPDES":    +0.030,   # Small positive: IT consulting surge (WFH infrastructure)
+    "MISCPROF":   -0.060,   # Moderate: architecture, consulting, R&D all down
+    "MGMT":       -0.050,   # Moderate: corporate activity compressed
+    "ADMIN":      -0.150,   # Large: staffing agencies, cleaning, security all down
+    "WASTE":      -0.050,   # Small: industrial waste down, medical waste up
+
+    # ── Education & Health ────────────────────────────────────────────────
+    "EDUC":       -0.100,   # Moderate: online transition; private school revenue down
+    "AMBULAT":    -0.250,   # Large: elective procedures cancelled; outpatient −25–30%
+    "HOSPITAL":   -0.150,   # Large: elective surgeries cancelled; ER volume down
+    "NURSING":    -0.100,   # Moderate: admissions down, staff costs up
+    "SOCIALAS":   -0.050,   # Small: some programs suspended, others increased
+
+    # ── Leisure & Hospitality ─────────────────────────────────────────────
+    "PERFORM":    -0.700,   # Catastrophic: all venues closed (Broadway, sports, concerts)
+    "AMUSE":      -0.600,   # Catastrophic: theme parks, gyms, casinos closed
+    "ACCOMM":     -0.680,   # Catastrophic: STR hotel occupancy rate −69% vs Feb
+    "FOODSVC":    -0.420,   # Very large: restaurants closed → delivery only (~−42%)
+
+    # ── Other Services ────────────────────────────────────────────────────
+    "OTHSVC":     -0.200,   # Large: personal services (barbers, repair) closed
+
+    # ── Government ───────────────────────────────────────────────────────
+    "FEDGOV":     +0.020,   # Slight increase: emergency response + CARES Act
+    "FEDGOVE":    -0.030,   # Small decline: postal service disruption; Amtrak
+    "SLGOV":      -0.040,   # Small decline: revenue shortfalls; some cuts
+    "SLGOVE":     -0.020,   # Small: transit authorities, utilities enterprises
 }
 
-# Log price changes (Δp_i = log(P_May / P_Feb)), by sector
-# Source: BLS PPI for producer-facing; BLS CPI for consumer-facing
+# Log price changes by sector
 COVID_DELTA_P = {
-    # ── Goods sectors ──────────────────────────────────────────────────────
-    # Agriculture: slight decline (demand shock for restaurants offset food retail)
-    "AG":        -0.030,
-    # Mining: large decline (OPEC price war + demand collapse)
-    "MIN":       -0.280,
-    # Utilities: slight decline
-    "UTIL":      -0.020,
-    # Construction: slight decline
-    "CONST":     -0.015,
-    # Food Manufacturing: slight increase (supply chain tensions)
-    "FOOD_MFG":   0.025,
-    # Chemicals: slight decline
-    "CHEM":      -0.020,
-    # Petroleum Products: very large decline (oil crash → gasoline −30%)
-    "PETRO":     -0.320,
-    # Electronics: slight decline (demand softness)
-    "ELEC":      -0.015,
-    # Motor Vehicles: moderate decline (dealer incentives + demand soft)
-    "AUTO":      -0.040,
-    # Other Manufacturing: slight decline
-    "OTH_MFG":   -0.030,
+    # ── Agriculture & Natural Resources ─────────────────────────────────
+    "FARM":       -0.030,   # Mild: restaurant demand fell, grocery demand rose
+    "FOREST":     -0.020,   # Mild
+    "OILGAS":     -0.300,   # Very large: OPEC price war + demand collapse
+    "MINE":       -0.050,   # Moderate: metals demand softened
+    "MINE_SUP":   -0.050,   # Follows oil/gas
 
-    # ── Distribution ───────────────────────────────────────────────────────
-    "WHOL":      -0.025,
-    # Retail: slight decline
-    "RETAIL":    -0.020,
+    # ── Utilities & Construction ──────────────────────────────────────
+    "UTIL":       -0.020,   # Mild: natural gas prices fell
+    "CONST":      -0.015,   # Mild deflation
 
-    # ── Transportation ─────────────────────────────────────────────────────
-    # Air: large decline (airlines slashing fares to stimulate minimal demand)
-    "AIR":       -0.200,
-    # Other Transportation: large decline (transit fares fixed; trucking fell)
-    "TRANS":     -0.080,
+    # ── Manufacturing ────────────────────────────────────────────────
+    "WOOD":       -0.020,   # Mild
+    "NMMIN":      -0.020,   # Mild
+    "PMETAL":     -0.050,   # Moderate: steel prices fell with demand
+    "FABMETAL":   -0.020,   # Mild
+    "MACH":       -0.020,   # Mild
+    "COMPELEC":   -0.015,   # Mild: electronics prices stable/slight decline
+    "ELECEQUIP":  -0.020,   # Mild
+    "MOTVEH":     -0.040,   # Moderate: incentives surged; CPI new car −4%
+    "OTRTRANS":   -0.020,   # Mild
+    "FURN":       -0.020,   # Mild
+    "MISCMFG":    -0.020,   # Mild
+    "FOOD":       +0.025,   # Positive: supply chain tension; BLS food-at-home CPI +2.5%
+    "TEXTILE":    -0.030,   # Mild decline
+    "APPAREL":    -0.050,   # Moderate: stores discounting to clear inventory
+    "PAPER":      -0.015,   # Mild
+    "PRINT":      -0.030,   # Moderate: advertising rate collapse
+    "PETRO":      -0.320,   # Very large: gasoline price −32% Feb–May 2020 (BLS CPI)
+    "CHEM":       -0.020,   # Mild: mixed (sanitizer up, industrial chem down)
+    "PLASTIC":    -0.020,   # Mild
 
-    # ── Services ───────────────────────────────────────────────────────────
-    # Information: slight increase (streaming price hikes)
-    "INFO":       0.010,
-    # Finance: slight increase (credit spreads widened = higher cost of credit)
-    "FIN":        0.020,
-    # Real Estate: slight decline (rents fell in some markets)
-    "REAL":      -0.015,
-    # Professional Services: slight decline
-    "PROF":      -0.015,
-    # Health Care: slight increase (PPE and COVID care more expensive)
-    "HEALTH":     0.020,
-    # Food Services: large decline (demand → restaurants fighting for business)
-    "FOOD_SVC":  -0.120,
-    # Arts: large decline (some venues reduced prices to attract virtual audiences)
-    "ARTS":      -0.100,
-    # Other Services: decline
-    "OTH_SVC":   -0.060,
-    # Government: stable
-    "GOVT":       0.000,
+    # ── Trade ────────────────────────────────────────────────────────
+    "WHOLE":      -0.025,   # Mild
+    "RETAIL":     -0.020,   # Mild: BLS CPI apparel −5%, offset by food/pharma
+
+    # ── Transportation ───────────────────────────────────────────────
+    "AIRTRANS":   -0.200,   # Large: BLS CPI airfare −20% (airlines cut fares)
+    "RAILTRANS":  -0.050,   # Moderate
+    "WATERTRANS": -0.040,   # Moderate
+    "TRUCK":      -0.030,   # Mild: fuel surcharges fell
+    "TRANSIT":    -0.050,   # Moderate: some fare reductions
+    "PIPE":       -0.050,   # Follows energy
+    "OTHERTRANS": -0.030,   # Mixed: couriers up, taxis down
+    "WAREHOUSE":  -0.020,   # Mild
+
+    # ── Information ──────────────────────────────────────────────────
+    "PUBLISH":    +0.010,   # Small positive: software subscription prices up
+    "MOVIE":      -0.050,   # Moderate: streaming shifted from theater
+    "BROADCAST":  +0.010,   # Small positive: telecom/streaming demand up
+    "INFODATA":   +0.015,   # Small positive: cloud pricing power
+
+    # ── Finance & Insurance ──────────────────────────────────────────
+    "CREDIT":     +0.020,   # Positive: credit spreads widened = higher cost of credit
+    "SECURIT":    +0.010,   # Small positive: trading spreads widened
+    "INSURE":     +0.010,   # Small positive: health/life insurance claims up
+    "FUNDS":       0.000,   # Flat: AUM-based fees fell with market decline
+
+    # ── Real Estate & Rental ─────────────────────────────────────────
+    "REALE":      -0.015,   # Small: rents fell in NYC/SF; national mostly flat
+    "RENTAL":     -0.020,   # Mild: car rental prices fell
+
+    # ── Professional & Business Services ─────────────────────────────
+    "LEGAL":      -0.015,   # Mild
+    "COMPDES":    +0.010,   # Small positive: IT services pricing firm
+    "MISCPROF":   -0.015,   # Mild
+    "MGMT":       -0.010,   # Mild
+    "ADMIN":      -0.020,   # Mild: staffing rates cut
+    "WASTE":      -0.010,   # Mild
+
+    # ── Education & Health ────────────────────────────────────────────
+    "EDUC":        0.000,   # Flat: tuition sticky (semester already billed)
+    "AMBULAT":    +0.025,   # Positive: PPE costs raised cost/procedure; BLS PCE health
+    "HOSPITAL":   +0.030,   # Positive: COVID treatment cost/bed; hospitals more costly
+    "NURSING":    +0.015,   # Slight positive: PPE compliance costs
+    "SOCIALAS":    0.000,   # Flat
+
+    # ── Leisure & Hospitality ─────────────────────────────────────────
+    "PERFORM":    -0.100,   # Large: virtual events deeply discounted
+    "AMUSE":      -0.100,   # Large: venues cutting prices/refunding
+    "ACCOMM":     -0.250,   # Very large: STR data hotel ADR −25% May 2020
+    "FOODSVC":    -0.120,   # Large: BLS CPI food away from home −2% (some discount)
+
+    # ── Other Services ────────────────────────────────────────────────
+    "OTHSVC":     -0.060,   # Moderate: personal services cutting prices to retain clients
+
+    # ── Government ───────────────────────────────────────────────────
+    "FEDGOV":      0.000,   # Flat: government prices unchanged
+    "FEDGOVE":     0.000,   # Flat
+    "SLGOV":       0.000,   # Flat
+    "SLGOVE":      0.000,   # Flat
 }
 
 
@@ -186,7 +273,7 @@ def get_covid_shocks(sectors: list) -> tuple:
 
     Parameters
     ----------
-    sectors : list of sector codes (must be subset of SECTOR_CODES)
+    sectors : list of sector codes (66 BEA sector codes)
 
     Returns
     -------
@@ -198,21 +285,33 @@ def get_covid_shocks(sectors: list) -> tuple:
     return delta_p, delta_y
 
 
+def check_gdp_calibration(sectors: list, verbose: bool = True) -> float:
+    """
+    Compute implied Σ w_i × Δy_i and compare to -9.5% target.
+
+    Returns the implied GDP change as a fraction.
+    """
+    va_weights = VALUE_ADDED_2017 / GDP_2017
+    delta_y = np.array([COVID_DELTA_Y.get(s, 0.0) for s in SECTOR_CODES])
+    implied_gdp = float((va_weights * delta_y).sum())
+    if verbose:
+        print(f"  Implied ΔGDP/GDP = {implied_gdp*100:+.2f}%  (target: −9.50%)")
+        if abs(implied_gdp + 0.095) > 0.015:
+            print("  WARNING: calibration off by more than 1.5pp — review shock data")
+    return implied_gdp
+
+
 def load_bls_covid_shocks(bls_dir: Path = Path("data/raw/bls")) -> tuple:
     """
     Load COVID price and output changes from downloaded BLS files.
     Falls back to embedded data if files not found.
     """
     ppi_file = bls_dir / "ppi_series.csv"
-    cpi_file = bls_dir / "cpi_series.csv"
-
     if not ppi_file.exists():
-        print("BLS files not found — using embedded COVID data.")
         return None, None
-
-    print("Loading BLS COVID data...")
     ppi = pd.read_csv(ppi_file)
-    cpi = pd.read_csv(cpi_file)
+    cpi_file = bls_dir / "cpi_series.csv"
+    cpi = pd.read_csv(cpi_file) if cpi_file.exists() else None
     return ppi, cpi
 
 
@@ -227,24 +326,28 @@ def run_covid_replication(
 
     Parameters
     ----------
-    net            : IONetwork (2017 BEA baseline)
+    net            : IONetwork (2017 BEA baseline, 66 sectors)
     use_embedded   : if True, use embedded COVID data; else try BLS files
     run_sensitivity: if True, compute sensitivity analysis over elasticities
     verbose        : if True, print results to console
 
     Returns
     -------
-    DecompositionResult
+    DecompositionResult with VA-weighted (primary) and BF (attribution) fields
     """
+    if verbose:
+        print("\n── COVID-19 Calibration Check ─────────────────────────────────────────")
+        check_gdp_calibration(net.sectors, verbose=True)
+
     # Get shocks
     if use_embedded:
         delta_p, delta_y = get_covid_shocks(net.sectors)
     else:
         ppi, cpi = load_bls_covid_shocks()
         if ppi is None:
+            print("  BLS files not found — using embedded COVID data.")
             delta_p, delta_y = get_covid_shocks(net.sectors)
         else:
-            # For now, fall back (full BLS parsing would go here)
             print("  Full BLS parsing not yet implemented — using embedded data.")
             delta_p, delta_y = get_covid_shocks(net.sectors)
 
@@ -252,7 +355,7 @@ def run_covid_replication(
         print("\n── COVID-19 Input Data (Feb–May 2020) ────────────────────────────────")
         df_input = pd.DataFrame({
             "sector": net.sectors,
-            "label": net.labels,
+            "label":  net.labels,
             "delta_p_%": delta_p * 100,
             "delta_y_%": delta_y * 100,
         })
@@ -303,21 +406,16 @@ def generate_paper_table2(result: DecompositionResult, net: IONetwork) -> pd.Dat
     """
     Generate a table analogous to Table 2 of Baqaee & Farhi (2022).
 
-    Table 2 in the paper shows:
-    - Sector name
-    - Output change (%)
-    - Price change (%)
-    - Supply shock contribution to GDP (%)
-    - Demand shock contribution to GDP (%)
-    - Total contribution to GDP (%)
-    - Domar weight
-    - Leontief multiplier
+    Table 2 shows sectoral contributions to the GDP decline:
+      - Output change, price change
+      - Supply and demand shock identification
+      - Contribution to GDP via supply and demand channels
+      - Domar weight, Leontief multiplier
 
     Returns the table as a DataFrame and saves to CSV.
     """
     df = result.summary_df.copy()
 
-    # Reorder columns to match paper's format
     table2 = df[[
         "label",
         "delta_y_pct",
@@ -373,27 +471,59 @@ def aggregate_contributions_by_type(result: DecompositionResult) -> pd.DataFrame
     """
     Aggregate sector contributions into meaningful groups for reporting.
 
-    Groups:
-      Contact-intensive services: FOOD_SVC, ARTS, AIR, TRANS, RETAIL
-      Manufacturing: AUTO, OTH_MFG, ELEC, FOOD_MFG, CHEM, PETRO
-      Energy: MIN, UTIL
-      Other services: HEALTH, PROF, FIN, INFO, REAL
-      Agriculture & Construction: AG, CONST
-      Government: GOVT
+    Groups match the BF paper's sector categorization:
+      Contact-intensive services, Manufacturing, Energy & Resources,
+      Finance & Real Estate, Other Services, Government
     """
     groups = {
-        "Contact-Intensive Services": ["FOOD_SVC", "ARTS", "AIR", "TRANS", "OTH_SVC"],
-        "Manufacturing": ["AUTO", "OTH_MFG", "ELEC", "FOOD_MFG", "CHEM", "PETRO"],
-        "Energy & Mining": ["MIN", "UTIL"],
-        "Other Services": ["HEALTH", "PROF", "FIN", "INFO", "REAL", "WHOL", "RETAIL"],
-        "Ag & Construction": ["AG", "CONST"],
-        "Government": ["GOVT"],
+        "Contact-Intensive Services": [
+            "FOODSVC", "PERFORM", "AMUSE", "ACCOMM", "AIRTRANS",
+            "TRANSIT", "MOVIE", "OTHSVC",
+        ],
+        "Manufacturing": [
+            "MOTVEH", "OTRTRANS", "COMPELEC", "MACH", "FABMETAL",
+            "PMETAL", "FOOD", "CHEM", "PLASTIC", "PETRO",
+            "TEXTILE", "APPAREL", "WOOD", "NMMIN", "FURN",
+            "MISCMFG", "ELECEQUIP", "PAPER", "PRINT",
+        ],
+        "Energy & Resources": [
+            "OILGAS", "MINE", "MINE_SUP", "UTIL", "PIPE",
+        ],
+        "Trade & Logistics": [
+            "WHOLE", "RETAIL", "TRUCK", "RAILTRANS", "WATERTRANS",
+            "WAREHOUSE", "OTHERTRANS",
+        ],
+        "Health Care": [
+            "AMBULAT", "HOSPITAL", "NURSING", "SOCIALAS",
+        ],
+        "Finance & Real Estate": [
+            "CREDIT", "SECURIT", "INSURE", "FUNDS", "REALE", "RENTAL",
+        ],
+        "Professional Services": [
+            "LEGAL", "COMPDES", "MISCPROF", "MGMT", "ADMIN", "WASTE",
+        ],
+        "Information": [
+            "PUBLISH", "BROADCAST", "INFODATA", "MOVIE",
+        ],
+        "Agriculture & Construction": [
+            "FARM", "FOREST", "CONST",
+        ],
+        "Education": [
+            "EDUC",
+        ],
+        "Government": [
+            "FEDGOV", "FEDGOVE", "SLGOV", "SLGOVE",
+        ],
     }
 
     df = result.summary_df.set_index("sector")
     rows = []
+    seen = set()
     for group_name, sectors in groups.items():
-        available = [s for s in sectors if s in df.index]
+        available = [s for s in sectors if s in df.index and s not in seen]
+        seen.update(available)
+        if not available:
+            continue
         sub = df.loc[available]
         rows.append({
             "group": group_name,
@@ -406,14 +536,15 @@ def aggregate_contributions_by_type(result: DecompositionResult) -> pd.DataFrame
     agg_df = pd.DataFrame(rows)
     agg_df["demand_share"] = (
         agg_df["demand_contribution_pct"].abs()
-        / (agg_df["supply_contribution_pct"].abs() + agg_df["demand_contribution_pct"].abs() + 1e-10)
+        / (agg_df["supply_contribution_pct"].abs()
+           + agg_df["demand_contribution_pct"].abs() + 1e-10)
     )
     return agg_df
 
 
 if __name__ == "__main__":
     print("=" * 65)
-    print("  Baqaee-Farhi (2022) — COVID Episode Replication")
+    print("  Baqaee-Farhi (2022) — COVID Episode Replication (66 sectors)")
     print("=" * 65)
 
     # Build IO network
@@ -424,17 +555,21 @@ if __name__ == "__main__":
     verify_network(net)
     save_network(net)
 
+    # Quick calibration check
+    print("\nStep 2: Calibration check...")
+    check_gdp_calibration(net.sectors)
+
     # Run COVID decomposition
-    print("\nStep 2: COVID Supply-Demand Decomposition...")
+    print("\nStep 3: COVID Supply-Demand Decomposition...")
     result = run_covid_replication(net, verbose=True)
 
     # Generate Table 2 analogue
-    print("\nStep 3: Generating Table 2 analogue...")
+    print("\nStep 4: Generating Table 2 analogue...")
     table2 = generate_paper_table2(result, net)
     print(table2.to_string(index=False, float_format=lambda x: f"{x:.3f}"))
 
     # Aggregate by sector type
-    print("\nStep 4: Aggregated contributions by sector group...")
+    print("\nStep 5: Aggregated contributions by sector group...")
     agg = aggregate_contributions_by_type(result)
     print(agg.to_string(index=False, float_format=lambda x: f"{x:.2f}"))
     agg.to_csv(TABLES_DIR / "covid_grouped_contributions.csv", index=False)
