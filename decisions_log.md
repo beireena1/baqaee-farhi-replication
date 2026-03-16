@@ -296,6 +296,156 @@ These findings are consistent with:
 
 ---
 
+## 7. Real-Data Run: Comparison of Embedded vs. File-Parsed Results (2026-03-16)
+
+### 7.1 Data Files Parsed
+
+The following three files from the BF replication package were parsed and integrated:
+
+| File | Contents | Role |
+|------|----------|------|
+| `IO_data_2018.mat` | BEA Use Table, 71×71 industries, 22 annual slices | Replaces RAS-balanced embedded Z matrix |
+| `BLS_labor_shock_202108.xls` | BLS labor hours changes by sector, monthly 2020-2021 | Replaces embedded `COVID_DELTA_Y` |
+| `Expenditure_202107.xls` | BEA PCE nominal expenditure, 2018–2021 monthly | Replaces embedded `COVID_DELTA_P` |
+
+Parsing code: `src/data_download/parse_real_data.py`
+
+### 7.2 IO Network Changes (Embedded 2017 → Real 2018)
+
+**IO data source:** `IO_data_2018.mat`, slice 18 (year 2018), 71-sector BEA Use Table.
+
+**Aggregation:** The 71-sector IO table (66 production + 5 government rows) is aggregated
+to our 66-sector model as follows:
+- IO rows 27–30 (4 retail sectors: motor vehicle dealers, food/bev stores, gen merchandise,
+  other retail) → model sector RETAIL
+- IO rows 47–48 (Housing Services, Other Real Estate) → model sector REALE
+- IO rows 66–67 (Federal defense, Federal nondefense) → model sector FEDGOV
+- IO rows 68, 69, 70 → model sectors FEDGOVE, SLGOV, SLGOVE (1:1)
+
+**Key metrics comparison:**
+
+| Metric | Embedded 2017 | Real 2018 |
+|--------|--------------|-----------|
+| GDP baseline | $19,519 bn | $18,037 bn |
+| Total gross output | ~$29 T | $31.4 T |
+| Σ Domar weights | ~1.80 | 1.74 |
+| Spectral radius of A | ~0.52 | 0.46 |
+
+**Note:** The $18.0T GDP from the IO table is lower than 2018 NIPA headline GDP ($20.6T).
+This reflects the IO Use Table's coverage, which excludes certain imputations and adjustments
+that appear in NIPA totals.  For decomposition purposes, relative Domar weights and VA shares
+are what matter.
+
+### 7.3 COVID Output Shocks: BLS Labor Hours vs. Embedded
+
+**BLS data:** `BLS_labor_shock_202108.xls`, column `diff_2005` (May 2020 vs. Feb 2020
+baseline, log change in labor hours).
+
+**Key differences from embedded DELTA_Y:**
+
+| Sector | BLS hours | Embedded output | Interpretation |
+|--------|----------|-----------------|----------------|
+| AIRTRANS | -25.7% | -67.0% | Airlines retained ~74% of staff via CARES Act furlough programs; revenue fell ~-88% |
+| ACCOMM | -48.7% | -68.0% | Hotels dismissed staff, but BLS labor < actual service collapse |
+| PETRO | -11.6% | -30.0% | Refineries ran with fewer workers; capital-intensive sector |
+| MOTVEH | -25.1% | -42.0% | Auto workers on CARES unemployment; plants shut 6 weeks |
+| HOSPITAL | -3.6% | -15.0% | Hospitals retained clinical staff despite elective procedure cancellations |
+| AMBULAT | -12.5% | -25.0% | Outpatient clinics: BLS captures visits imperfectly |
+| PUBLISH | -3.4% | +3.0% | BLS shows slight decline; embedded assumed WFH software surge |
+| INFODATA | -1.1% | +5.0% | Similar: cloud services surged but BLS labor didn't track it |
+
+**Interpretation:** BLS labor hours are a **lower bound** on output decline for contact-intensive
+services (labor retained via government programs) and an **underestimate** for sectors
+where output surged without proportional employment growth (software, streaming).
+
+**GDP calibration with BLS shocks (VA-weighted):** −7.99% (before FARM/gov fallbacks),
+−8.75% (after fallbacks). Target: −9.5%.  BLS-based shocks underestimate the output collapse
+by ~0.75pp relative to BEA monthly GDP-by-industry data.
+
+### 7.4 COVID Demand Shocks: PCE Expenditure vs. Embedded Price Changes
+
+**PCE data:** `Expenditure_202107.xls`, log change in nominal PCE spending, Feb→May 2020.
+
+**Conceptual difference:** The embedded `COVID_DELTA_P` values are *price changes* calibrated
+to BLS PPI/CPI data. The PCE expenditure file provides *nominal spending changes* = ΔPrice + ΔQuantity.
+
+For the real-data run, PCE log changes are used directly as `COVID_DELTA_P`, with a ±0.8 cap
+to prevent extreme values from dominating. This captures the demand-side spending collapse but
+overstates the "price" signal for sectors that shut down (quantity → 0 drives PCE → 0 even
+if prices are stable).
+
+**Key PCE values vs. embedded prices:**
+
+| Sector | PCE log change | Embedded price Δ | Interpretation |
+|--------|---------------|-----------------|----------------|
+| AIRTRANS | -2.19 (capped -0.80) | -0.20 | PCE: ~-88% spending; price fell only ~20% (airlines cut fares) |
+| ACCOMM | -1.52 (capped -0.80) | -0.25 | PCE: ~-78% spending; actual hotel ADR fell ~25% |
+| FOODSVC | -0.41 | -0.12 | PCE: -34% spending; prices fell slightly (-4%) |
+| PETRO | -0.32 | -0.32 | Close match: gasoline prices fell ~32% (mostly price, not quantity) |
+| FOOD | +0.08 | +0.025 | PCE: +8.4% food-at-home spending (hoarding + pantry stocking) |
+| HOSPITAL | -0.20 | +0.03 | PCE fell (less volume) but embedded has prices rising (+3%): contradiction |
+| AMBULAT | -0.29 | +0.025 | Same issue: PCE fell, embedded has prices rising slightly |
+
+### 7.5 Decomposition Results: Embedded vs. Real Data
+
+All comparisons use the **real IO network (2018)** as the common baseline.
+
+| Metric | Embedded shocks | Real data shocks |
+|--------|----------------|-----------------|
+| ΔGDP/GDP (VA-weighted) | -10.74% | -8.75% |
+| Supply contribution | -4.69% (43.7%) | -1.45% (16.6%) |
+| Demand contribution | -6.05% (56.3%) | -7.30% (83.4%) |
+
+**Key driver of the shift in supply/demand split:**
+
+With real data, the PCE-based `DELTA_P` signals are much more negative for service sectors
+(AIRTRANS -80%, ACCOMM -80%, PERFORM -80%, TRANSIT -80%, OTHSVC -73%, AMUSE -51%, FOODSVC -41%).
+In the BF framework, when both price (DELTA_P) and quantity (DELTA_Y) fall together, the model
+attributes the GDP impact to demand shocks. With the large negative PCE values, demand attribution
+rises to 83.4%.
+
+The embedded approach, by contrast, uses actual price changes from PPI/CPI which are far more
+moderate (AIRTRANS prices fell only -20%, ACCOMM -25%), allowing the model to identify supply
+shocks where output fell more than implied by the price change alone.
+
+**Conclusion:** The choice of DELTA_P proxy matters enormously for the supply/demand split.
+Using PCE spending changes (real data) produces a demand-heavy (83%) split. Using BLS PPI
+price changes (embedded calibration) produces a near-balanced (44%/56%) split.
+
+### 7.6 Sector Ranking Changes
+
+**Real data top 5 sectors by total contribution to ΔGDP:**
+1. Food services and drinking places: -0.78pp
+2. Real estate: -0.63pp
+3. Retail trade: -0.48pp
+4. Wholesale trade: -0.48pp
+5. Administrative and support services: -0.46pp
+
+**Embedded top 5:**
+1. Retail trade: -1.05pp
+2. Food services and drinking places: -0.87pp
+3. Ambulatory health care services: -0.87pp
+4. Wholesale trade: -0.61pp
+5. Accommodation: -0.56pp
+
+**Notable changes:**
+- REALE jumps to #2 (real data: larger IO output weights in 2018 data)
+- AMBULAT drops significantly (BLS hours show -12.5% vs embedded -25%; PCE health spending fell)
+- AIRTRANS impact is smaller with real data (BLS -25.7% vs embedded -67%)
+- BROADCAST, PUBLISH, COMPDES go from positive contributions (embedded: WFH surge) to
+  negative (BLS shows slight labor hour declines; PCE for telecom/internet is near flat)
+
+### 7.7 Updated Figure 3 and Table 2
+
+**Files produced:**
+- `outputs/figures/fig3_real_covid_contributions.png` — real data sectoral contribution chart
+- `outputs/figures/fig4_real_covid_waterfall.png` — real data waterfall chart
+- `outputs/tables/table2_real_data_contributions.csv` — Table 2 analogue with real data
+- `outputs/tables/table2_real_all66_contributions.csv` — all 66 sectors
+- `outputs/tables/comparison_real_vs_embedded.csv` — side-by-side comparison
+
+---
+
 ## 6. Change Log
 
 | Date | Change | Reason |
@@ -310,3 +460,8 @@ These findings are consistent with:
 | 2026-03-10 | RAS bi-proportional balancing for IO matrix | Material balance now satisfied to 1e-13 tolerance |
 | 2026-03-10 | COVID GDP calibrated to −10.17% (target −9.5%); supply/demand split 50/50 | Matches paper's headline finding; 0.67pp discrepancy from embedding approximation |
 | 2026-03-10 | 66-sector COVID and inflation shock vectors documented in `covid_episode.py` and `inflation_episode.py` | All 66 BEA sectors have explicit Δy and Δp values with source citations |
+| 2026-03-16 | **Parsed IO_data_2018.mat**: replaced embedded RAS-balanced matrix with real 2018 BEA Use Table data | User-requested: eliminate embedded data; aggregation to 66 model sectors documented in §7.2 |
+| 2026-03-16 | **Parsed BLS_labor_shock_202108.xls**: replaced embedded DELTA_Y with BLS `diff_2005` (May vs Feb 2020) | Real labor-hours proxy for output changes; FARM/gov sectors fall back to embedded |
+| 2026-03-16 | **Parsed Expenditure_202107.xls**: replaced embedded DELTA_P with PCE log(May/Feb) spending changes | PCE changes capture demand-side spending collapse; capped at ±0.8 to limit quantity artefacts |
+| 2026-03-16 | Real-data ΔGDP = -8.75% (vs -10.74% embedded), supply/demand split shifts to 17%/83% | See §7.5: PCE-based delta_p is demand-heavy because it includes quantity collapses in services |
+| 2026-03-16 | Updated figures: fig3_real_covid_contributions.png, fig4_real_covid_waterfall.png | Updated Table 2 analogue: table2_real_data_contributions.csv |

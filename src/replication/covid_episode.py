@@ -301,23 +301,69 @@ def check_gdp_calibration(sectors: list, verbose: bool = True) -> float:
     return implied_gdp
 
 
-def load_bls_covid_shocks(bls_dir: Path = Path("data/raw/bls")) -> tuple:
+def load_real_covid_shocks(sectors: list) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
     """
-    Load COVID price and output changes from downloaded BLS files.
-    Falls back to embedded data if files not found.
+    Load COVID shocks from the three replication data files.
+
+    Output changes (delta_y):
+      BLS_labor_shock_202108.xls — column diff_2005 = May 2020 vs Feb 2020 log change
+      in labor hours.  Labor hours proxy for sectoral output.  Sectors with no BLS
+      data (FARM, government sectors) fall back to embedded values.
+
+    Demand-side changes (delta_p):
+      Expenditure_202107.xls — Feb→May 2020 log change in nominal PCE spending by
+      sector.  For consumer-facing sectors this captures the combined price × quantity
+      shift; for B2B sectors with no PCE coverage embedded values are used.
+
+    Price interpretation note:
+      PCE log changes for shutdown sectors (AIRTRANS, ACCOMM, PERFORM, etc.) are
+      dominated by quantity collapses and substantially exceed plausible price changes.
+      These are capped at ±0.8 in absolute value.  See decisions_log.md §5.3.
+
+    Returns
+    -------
+    (delta_p, delta_y) as float arrays, or (None, None) if files not found.
     """
-    ppi_file = bls_dir / "ppi_series.csv"
-    if not ppi_file.exists():
+    from src.data_download.parse_real_data import (
+        BLS_XLS_PATH, PCE_XLS_PATH, parse_bls_shocks, parse_pce_shocks,
+    )
+    if not BLS_XLS_PATH.exists() or not PCE_XLS_PATH.exists():
         return None, None
-    ppi = pd.read_csv(ppi_file)
-    cpi_file = bls_dir / "cpi_series.csv"
-    cpi = pd.read_csv(cpi_file) if cpi_file.exists() else None
-    return ppi, cpi
+
+    dy_dict = parse_bls_shocks(BLS_XLS_PATH)
+    dp_dict = parse_pce_shocks(PCE_XLS_PATH)
+
+    # Build delta_y: use BLS; fall back to embedded where BLS == 0.0
+    delta_y = np.zeros(len(sectors))
+    for i, s in enumerate(sectors):
+        bls_val = dy_dict.get(s, None)
+        if bls_val is not None and bls_val != 0.0:
+            delta_y[i] = bls_val
+        else:
+            delta_y[i] = COVID_DELTA_Y.get(s, 0.0)
+
+    # Build delta_p: use PCE where available; fall back to embedded
+    # Cap PCE values at ±0.8 to prevent quantity-collapse artefacts
+    PCE_CAP = 0.8
+    delta_p = np.zeros(len(sectors))
+    for i, s in enumerate(sectors):
+        pce_val = dp_dict.get(s, None)
+        if pce_val is not None:
+            delta_p[i] = max(-PCE_CAP, min(PCE_CAP, pce_val))
+        else:
+            delta_p[i] = COVID_DELTA_P.get(s, 0.0)
+
+    return delta_p, delta_y
+
+
+def load_bls_covid_shocks(bls_dir: Path = Path("data/raw/bls")) -> tuple:
+    """Legacy stub — superseded by load_real_covid_shocks()."""
+    return None, None
 
 
 def run_covid_replication(
     net: IONetwork,
-    use_embedded: bool = True,
+    use_embedded: bool = False,
     run_sensitivity: bool = True,
     verbose: bool = True,
 ) -> DecompositionResult:
@@ -326,8 +372,11 @@ def run_covid_replication(
 
     Parameters
     ----------
-    net            : IONetwork (2017 BEA baseline, 66 sectors)
-    use_embedded   : if True, use embedded COVID data; else try BLS files
+    net            : IONetwork (BEA baseline, 66 sectors)
+    use_embedded   : if True, force use of embedded shock data regardless of
+                     whether real data files are present.  Default False: uses
+                     BLS_labor_shock_202108.xls + Expenditure_202107.xls when
+                     those files exist in the repository root.
     run_sensitivity: if True, compute sensitivity analysis over elasticities
     verbose        : if True, print results to console
 
@@ -335,21 +384,26 @@ def run_covid_replication(
     -------
     DecompositionResult with VA-weighted (primary) and BF (attribution) fields
     """
-    if verbose:
-        print("\n── COVID-19 Calibration Check ─────────────────────────────────────────")
-        check_gdp_calibration(net.sectors, verbose=True)
-
     # Get shocks
-    if use_embedded:
-        delta_p, delta_y = get_covid_shocks(net.sectors)
-    else:
-        ppi, cpi = load_bls_covid_shocks()
-        if ppi is None:
-            print("  BLS files not found — using embedded COVID data.")
-            delta_p, delta_y = get_covid_shocks(net.sectors)
+    data_source = "embedded"
+    if not use_embedded:
+        delta_p_real, delta_y_real = load_real_covid_shocks(net.sectors)
+        if delta_p_real is not None:
+            delta_p, delta_y = delta_p_real, delta_y_real
+            data_source = "real (BLS + PCE)"
         else:
-            print("  Full BLS parsing not yet implemented — using embedded data.")
+            if verbose:
+                print("  Real data files not found — using embedded COVID shocks.")
             delta_p, delta_y = get_covid_shocks(net.sectors)
+    else:
+        delta_p, delta_y = get_covid_shocks(net.sectors)
+
+    if verbose:
+        print(f"\n── COVID-19 Shock Data Source: {data_source} ──────────────────────────")
+        # Calibration check with actual shocks used
+        va_weights = net.w_va
+        implied_gdp = float((va_weights * delta_y).sum())
+        print(f"  Implied ΔGDP/GDP = {implied_gdp*100:+.2f}%  (target: −9.50%)")
 
     if verbose:
         print("\n── COVID-19 Input Data (Feb–May 2020) ────────────────────────────────")

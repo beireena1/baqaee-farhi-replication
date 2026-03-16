@@ -685,15 +685,44 @@ def build_network_from_embedded(year: int = 2017) -> "IONetwork":
     return IONetwork(Z=Z, x=x, v=v, sectors=SECTOR_CODES, labels=SECTOR_LABELS)
 
 
+def build_network_from_mat(mat_path: Path = None) -> "IONetwork":
+    """
+    Construct IONetwork from IO_data_2018.mat (real BEA Use Table data, 2018).
+
+    The MATLAB file contains the full 71-industry × 71-industry Use Table with
+    22 annual slices (2000–2018).  We use slice 18 (year 2018) and aggregate to
+    the 66 model sectors.  All values are converted from millions USD to billions.
+
+    Z matrix is used directly (no RAS balancing needed — the BEA table already
+    satisfies material balance to within rounding).
+    """
+    from src.data_download.parse_real_data import parse_io_mat, IO_MAT_PATH
+    path = mat_path or IO_MAT_PATH
+    Z_mil, x_mil, v_mil, _ = parse_io_mat(path)
+
+    # Convert millions → billions
+    Z = Z_mil / 1000.0
+    x = x_mil / 1000.0
+    v = v_mil / 1000.0
+
+    # Clamp any residual negatives (rounding artefacts)
+    Z = np.maximum(Z, 0.0)
+    x = np.maximum(x, 0.0)
+    v = np.maximum(v, 0.0)
+
+    return IONetwork(Z=Z, x=x, v=v, sectors=SECTOR_CODES, labels=SECTOR_LABELS)
+
+
 def get_io_network(year: int = 2017, use_real_data: bool = True) -> "IONetwork":
-    """Main entry point. Uses real BEA files if present, else embedded data."""
-    bea_dir = Path("data/raw/bea")
-    if use_real_data and (bea_dir / "use_table_2017.csv").exists():
-        print("NOTE: BEA file parsing not yet implemented; using embedded data.")
+    """Main entry point. Uses IO_data_2018.mat if present, else embedded data."""
+    from src.data_download.parse_real_data import IO_MAT_PATH
+    if use_real_data and IO_MAT_PATH.exists():
+        print(f"Loading real IO data from {IO_MAT_PATH.name} (year 2018).")
+        return build_network_from_mat(IO_MAT_PATH)
     else:
-        print("BEA data files not found — using embedded 2017 calibration.")
-        print("Run: python src/data_download/download_bea.py  to fetch real data.")
-    return build_network_from_embedded(year)
+        print("IO_data_2018.mat not found — using embedded 2017 calibration.")
+        print("Place IO_data_2018.mat in the repository root to use real data.")
+        return build_network_from_embedded(year)
 
 
 def save_network(net: "IONetwork", out_dir: Path = PROCESSED_DIR) -> None:
