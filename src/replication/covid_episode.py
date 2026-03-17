@@ -303,37 +303,38 @@ def check_gdp_calibration(sectors: list, verbose: bool = True) -> float:
 
 def load_real_covid_shocks(sectors: list) -> tuple[np.ndarray, np.ndarray] | tuple[None, None]:
     """
-    Load COVID shocks from the three replication data files.
+    Load COVID shocks from the replication data files.
 
+    Methodology (paper baseline, B&F 2022 Section 4–6):
+    ─────────────────────────────────────────────────────
     Output changes (delta_y):
-      BLS_labor_shock_202108.xls — column diff_2005 = May 2020 vs Feb 2020 log change
-      in labor hours.  Labor hours proxy for sectoral output.  Sectors with no BLS
-      data (FARM, government sectors) fall back to embedded values.
+      BLS_labor_shock_202108.xls, column diff_2005 = log change in hours worked,
+      Feb 2020 → May 2020 (baseline period = Feb 2020).
+      Sectors with no BLS coverage (FARM, government) fall back to embedded values.
 
-    Demand-side changes (delta_p):
-      Expenditure_202107.xls — Feb→May 2020 log change in nominal PCE spending by
-      sector.  For consumer-facing sectors this captures the combined price × quantity
-      shift; for B2B sectors with no PCE coverage embedded values are used.
+    Price changes (delta_p):
+      The paper uses BLS PPI / BEA PCE price deflators — NOT nominal PCE spending.
+      The Expenditure_202107.xls file contains nominal spending (P × Q), which is
+      dominated by quantity collapses for shut-down sectors and is NOT suitable as a
+      price variable.  Therefore delta_p uses the EMBEDDED calibration (PPI/CPI-based,
+      see COVID_DELTA_P at the top of this file), which is the closest available proxy
+      to the paper's PCE deflator inputs.
 
-    Price interpretation note:
-      PCE log changes for shutdown sectors (AIRTRANS, ACCOMM, PERFORM, etc.) are
-      dominated by quantity collapses and substantially exceed plausible price changes.
-      These are capped at ±0.8 in absolute value.  See decisions_log.md §5.3.
+    Elasticities:
+      Unit elasticities σ_i = ε_i = 1 (paper's stated baseline, Section 4.2).
+      Under unit elasticities: s_i = Δy_i − Δp_i, d_i = Δy_i + Δp_i.
 
     Returns
     -------
-    (delta_p, delta_y) as float arrays, or (None, None) if files not found.
+    (delta_p, delta_y) as float arrays, or (None, None) if BLS file not found.
     """
-    from src.data_download.parse_real_data import (
-        BLS_XLS_PATH, PCE_XLS_PATH, parse_bls_shocks, parse_pce_shocks,
-    )
-    if not BLS_XLS_PATH.exists() or not PCE_XLS_PATH.exists():
+    from src.data_download.parse_real_data import BLS_XLS_PATH, parse_bls_shocks
+    if not BLS_XLS_PATH.exists():
         return None, None
 
     dy_dict = parse_bls_shocks(BLS_XLS_PATH)
-    dp_dict = parse_pce_shocks(PCE_XLS_PATH)
 
-    # Build delta_y: use BLS; fall back to embedded where BLS == 0.0
+    # delta_y: BLS hours; fall back to embedded for sectors with no BLS data
     delta_y = np.zeros(len(sectors))
     for i, s in enumerate(sectors):
         bls_val = dy_dict.get(s, None)
@@ -342,16 +343,9 @@ def load_real_covid_shocks(sectors: list) -> tuple[np.ndarray, np.ndarray] | tup
         else:
             delta_y[i] = COVID_DELTA_Y.get(s, 0.0)
 
-    # Build delta_p: use PCE where available; fall back to embedded
-    # Cap PCE values at ±0.8 to prevent quantity-collapse artefacts
-    PCE_CAP = 0.8
-    delta_p = np.zeros(len(sectors))
-    for i, s in enumerate(sectors):
-        pce_val = dp_dict.get(s, None)
-        if pce_val is not None:
-            delta_p[i] = max(-PCE_CAP, min(PCE_CAP, pce_val))
-        else:
-            delta_p[i] = COVID_DELTA_P.get(s, 0.0)
+    # delta_p: use embedded PPI/CPI-calibrated values (proper price data)
+    # The Expenditure file provides nominal spending, not prices — see docstring.
+    delta_p = np.array([COVID_DELTA_P.get(s, 0.0) for s in sectors])
 
     return delta_p, delta_y
 

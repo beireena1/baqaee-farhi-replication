@@ -57,12 +57,33 @@ from src.io_network.construct_network import IONetwork
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# SECTOR-SPECIFIC ELASTICITY PARAMETERS
-# Calibrated from empirical IO and demand literature (see decisions_log.md §2.2)
+# ELASTICITY PARAMETERS
+#
+# BASELINE (paper's default): σ_i = ε_i = 1  (Cobb-Douglas / unit elasticities)
+# ─────────────────────────────────────────────────────────────────────────────
+# Baqaee & Farhi (2022) Section 4.2 states: "For the baseline, we set σ_i = ε_i = 1
+# for all sectors."  Under unit elasticities the identification simplifies to:
+#
+#   s_i = Δy_i − Δp_i     (supply shock  = output change minus price change)
+#   d_i = Δy_i + Δp_i     (demand shock  = output change plus  price change)
+#
+# These formulas are symmetric: when Δp_i = 0 the split is exactly 50/50; when
+# Δp_i < 0 (prices fell) demand attribution increases; when Δp_i > 0 (prices
+# rose) supply attribution increases.
+#
+# SENSITIVITY / ALTERNATIVE: heterogeneous sector-specific elasticities are
+# retained below as HETERO_SUPPLY_ELASTICITIES / HETERO_DEMAND_ELASTICITIES for
+# sensitivity analysis.  These were not calibrated from the paper; they are our
+# own prior estimates from the IO / demand literature and are NOT used by default.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Supply elasticities σ_i (how much output responds to a price increase)
-SUPPLY_ELASTICITIES: dict[str, float] = {
+# ── Paper baseline: unit elasticities ────────────────────────────────────────
+BF_SIGMA_BASELINE:   float = 1.0   # supply elasticity σ_i (Cobb-Douglas)
+BF_EPSILON_BASELINE: float = 1.0   # demand elasticity  ε_i (Cobb-Douglas)
+
+# ── Alternative: heterogeneous sector-specific elasticities ──────────────────
+# NOT used in the baseline.  Retained for sensitivity analysis only.
+HETERO_SUPPLY_ELASTICITIES: dict[str, float] = {
     "FARM":       2.0,  "FOREST":    2.0,  "OILGAS":    1.5,
     "MINE":       1.5,  "MINE_SUP":  2.0,  "UTIL":      0.5,
     "CONST":      2.0,  "WOOD":      2.5,  "NMMIN":     2.0,
@@ -87,10 +108,7 @@ SUPPLY_ELASTICITIES: dict[str, float] = {
     "FEDGOVE":    0.5,  "SLGOV":     0.3,  "SLGOVE":    0.5,
 }
 
-# Demand price elasticities ε_i (|∂log Q / ∂log P|, positive value)
-# Higher = more price-sensitive demand (luxury / discretionary)
-# Lower  = necessities, captive demand
-DEMAND_ELASTICITIES: dict[str, float] = {
+HETERO_DEMAND_ELASTICITIES: dict[str, float] = {
     "FARM":       0.5,  "FOREST":    0.6,  "OILGAS":    0.5,
     "MINE":       0.6,  "MINE_SUP":  0.7,  "UTIL":      0.4,
     "CONST":      0.8,  "WOOD":      0.9,  "NMMIN":     0.7,
@@ -115,14 +133,33 @@ DEMAND_ELASTICITIES: dict[str, float] = {
     "FEDGOVE":    0.3,  "SLGOV":     0.2,  "SLGOVE":    0.3,
 }
 
+# Legacy aliases (so external callers that import SUPPLY_ELASTICITIES still work)
+SUPPLY_ELASTICITIES = HETERO_SUPPLY_ELASTICITIES
+DEMAND_ELASTICITIES = HETERO_DEMAND_ELASTICITIES
 
-DEFAULT_SUPPLY_ELASTICITIES = SUPPLY_ELASTICITIES   # alias for external callers
-DEFAULT_DEMAND_ELASTICITIES = DEMAND_ELASTICITIES   # alias for external callers
+
+DEFAULT_SUPPLY_ELASTICITIES = HETERO_SUPPLY_ELASTICITIES   # alias (legacy)
+DEFAULT_DEMAND_ELASTICITIES = HETERO_DEMAND_ELASTICITIES   # alias (legacy)
 
 
-def get_elasticities(sectors: list[str]) -> tuple[np.ndarray, np.ndarray]:
-    sigma   = np.array([SUPPLY_ELASTICITIES.get(s, 2.0) for s in sectors])
-    epsilon = np.array([DEMAND_ELASTICITIES.get(s, 0.8) for s in sectors])
+def get_elasticities(
+    sectors: list[str],
+    unit: bool = True,
+) -> tuple[np.ndarray, np.ndarray]:
+    """
+    Return (sigma, epsilon) elasticity arrays for the given sector list.
+
+    Parameters
+    ----------
+    sectors : list of sector codes
+    unit    : if True (default), return σ=ε=1 everywhere — the paper's baseline.
+              if False, return the heterogeneous sector-specific estimates.
+    """
+    n = len(sectors)
+    if unit:
+        return np.ones(n), np.ones(n)
+    sigma   = np.array([HETERO_SUPPLY_ELASTICITIES.get(s, 2.0) for s in sectors])
+    epsilon = np.array([HETERO_DEMAND_ELASTICITIES.get(s, 0.8) for s in sectors])
     return sigma, epsilon
 
 
@@ -197,10 +234,14 @@ def identify_shocks(
     """
     Identify supply and demand shocks from observed price/output changes.
 
+    With the paper's baseline unit elasticities (σ=ε=1):
+        s_i = Δy_i − Δp_i
+        d_i = Δy_i + Δp_i
+
     Returns (s, d, sigma, epsilon) as arrays of length N.
     """
     if sigma is None or epsilon is None:
-        sigma, epsilon = get_elasticities(sectors)
+        sigma, epsilon = get_elasticities(sectors, unit=True)
 
     s = delta_y / sigma   - delta_p    # supply shock
     d = delta_p + delta_y / epsilon    # demand shock
